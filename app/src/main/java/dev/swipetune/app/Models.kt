@@ -9,6 +9,7 @@ data class SongRef(
     val artist: String = "Unknown artist",
     val album: String = "Unknown album",
     val folderName: String = "Music",
+    val genre: String = "Uncategorized",
     val durationMs: Long = 0,
     val trackNumber: Int = 0,
 )
@@ -35,6 +36,7 @@ data class UserPlaylist(
     val id: String,
     val name: String,
     val songUris: List<String> = emptyList(),
+    val coverUri: String? = null,
 )
 
 data class PersistedState(
@@ -48,6 +50,9 @@ data class PersistedState(
     val playlists: List<UserPlaylist> = emptyList(),
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val dynamicColor: Boolean = true,
+    val artworkAtmosphere: Boolean = true,
+    val expressiveMotion: Boolean = true,
+    val compactLibraryRows: Boolean = false,
 )
 
 data class AppUiState(
@@ -74,6 +79,14 @@ data class AppUiState(
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val dynamicColor: Boolean = true,
+    val artworkAtmosphere: Boolean = true,
+    val expressiveMotion: Boolean = true,
+    val compactLibraryRows: Boolean = false,
+    val playbackPreferences: PlaybackPreferences = PlaybackPreferences(),
+    val recentHistory: List<HistorySummary> = emptyList(),
+    val lyrics: List<LyricLine> = emptyList(),
+    val selectedSongUris: Set<String> = emptySet(),
+    val duplicateGroups: List<DuplicateGroup> = emptyList(),
 ) {
     val visibleSongs: List<SongRef>
         get() = songs.filter { decisions[it.uri] != ReviewDecision.REJECTED }

@@ -1,6 +1,6 @@
 # Design — SwipeTune
 
-<!-- Hallmark · pre-emit critique: P5 H4 E4 S5 R4 V4 -->
+<!-- Hallmark · pre-emit critique: P5 H5 E5 S5 R5 V5 -->
 
 A locked design system for the Android app. UI work reads this file before implementation. The system follows Material 3 Expressive principles without imitating PixelPlayer's brand or copying its source.
 
@@ -62,12 +62,32 @@ Use a 4 dp grid. Standard spacing values are 4, 8, 12, 16, 20, 24, 32, and 40 dp
 
 ## Motion
 
-- Navigation and player expansion use shared-axis or container-transform-like motion.
-- Playback controls use short spring responses; play/pause may morph or crossfade.
+- Navigation uses a directional shared-axis transition: outgoing content recedes and fades while incoming content arrives from the navigation edge. Persistent playback chrome never disappears during the transition.
+- Mini-player arrival and player expansion preserve artwork, title, and transport continuity. Expansion behaves like a container transformation into the full player rather than a route replacement.
+- Playback controls use short, critically damped spring responses. Play/pause morphs in place; selected shuffle, repeat, and favorite controls change both fill and shape without shifting neighboring controls.
+- Playback must always look alive: the mini-player progress line advances continuously, the active library row has a small equalizer indicator, and the full-player waveform/progress head moves while audio plays. Functional progress continues under reduced motion.
+- Seek gestures update the waveform and elapsed time synchronously with the finger, then settle without overshoot. Large seek jumps use a brief tonal pulse rather than a toast.
+- Queue and settings surfaces rise as anchored sheets with a visible drag handle, dimming the source without destroying its visual context. Queue reordering lifts only the dragged row and animates surrounding placement.
+- Press feedback starts on touch-down (tonal compression plus a 0.98 scale where space permits), completes within roughly 120 ms, and never delays the resulting action.
+- Major transitions target 320–420 ms; ordinary sheets and destination changes 220–320 ms; control feedback 90–150 ms. Entrances decelerate, exits are shorter, and no control bounces.
 - Review cards track the finger, rotate subtly, and reveal Keep/Reject intent progressively.
 - Undo restores the prior card and playback state with a reversible spring.
 - List changes animate placement, not every property.
-- Respect system animator scale and reduced-motion expectations. No ambient looping animation.
+- Respect system animator scale and reduced-motion expectations. Spatial motion collapses to a short crossfade, while progress, buffering, and playback-state indicators remain functional. No decorative ambient looping animation.
+
+### PixelPlayer motion study, 2026-10-25
+
+The reference build was exercised on the same Pixel 9 API 36 emulator with real copied MP3 files and captured as video. Transferable behavior—not branding, layout, assets, or source—includes:
+
+- continuity between library row, mini-player, full player, system session, and queue;
+- whole-surface selected states instead of color-only icons;
+- a waveform that carries both progress and direct manipulation;
+- asymmetric expressive containers that morph without moving labels unexpectedly;
+- bottom sheets that retain the source screen as spatial context;
+- subtle active-track motion and immediate touch-down response;
+- drag reordering where neighboring rows smoothly make room.
+
+SwipeTune should match that perceived responsiveness while retaining its own frosted, artwork-led Material 3 Expressive identity and its distinct Review mode.
 
 ## Controls and states
 
@@ -93,5 +113,5 @@ Use a 4 dp grid. Standard spacing values are 4, 8, 12, 16, 20, 24, 32, and 40 dp
 
 ## Scope boundary
 
-The first complete baseline includes service-owned playback, global Android media controls, library indexing and browsing, favorites, search/sort, queue controls, full player, swipe review, appearance/settings, and robust empty/error states. Lyrics, equalizer, widgets, listening statistics, tag editing, cloud sources, and Android Auto are subsequent modules and must not appear as inert UI before implementation.
+The complete local-player target includes service-owned playback and Android media controls; a Room-backed MediaStore/SAF library; detailed collections; advanced queue and playlists; Review mode; lyrics, sleep timer, equalizer, ReplayGain and transition controls; batch library actions; history and statistics; explicit export/import plus Android cloud backup; widgets; Android Auto; and deep appearance/motion customization. Remote streaming services remain out of scope. No module appears as inert UI before its working vertical slice is wired.
 

@@ -32,6 +32,9 @@ class SessionStore(context: Context) {
             themeMode = runCatching { ThemeMode.valueOf(root.optString("themeMode", ThemeMode.SYSTEM.name)) }
                 .getOrDefault(ThemeMode.SYSTEM),
             dynamicColor = root.optBoolean("dynamicColor", true),
+            artworkAtmosphere = root.optBoolean("artworkAtmosphere", true),
+            expressiveMotion = root.optBoolean("expressiveMotion", true),
+            compactLibraryRows = root.optBoolean("compactLibraryRows", false),
         )
     }.getOrElse { PersistedState() }
 
@@ -47,6 +50,7 @@ class SessionStore(context: Context) {
                         put("artist", song.artist)
                         put("album", song.album)
                         put("folderName", song.folderName)
+                        put("genre", song.genre)
                         put("durationMs", song.durationMs)
                         put("trackNumber", song.trackNumber)
                     })
@@ -69,12 +73,16 @@ class SessionStore(context: Context) {
                         JSONObject()
                             .put("id", playlist.id)
                             .put("name", playlist.name)
-                            .put("songs", JSONArray(playlist.songUris)),
+                            .put("songs", JSONArray(playlist.songUris))
+                            .put("coverUri", playlist.coverUri ?: ""),
                     )
                 }
             })
             put("themeMode", state.themeMode.name)
             put("dynamicColor", state.dynamicColor)
+            put("artworkAtmosphere", state.artworkAtmosphere)
+            put("expressiveMotion", state.expressiveMotion)
+            put("compactLibraryRows", state.compactLibraryRows)
         }
         val output = file.startWrite()
         try {
@@ -84,6 +92,26 @@ class SessionStore(context: Context) {
             file.failWrite(output)
             throw error
         }
+    }
+
+    fun exportJson(): String = if (file.baseFile.exists()) {
+        file.readFully().toString(Charsets.UTF_8)
+    } else {
+        save(PersistedState())
+        file.readFully().toString(Charsets.UTF_8)
+    }
+
+    fun importJson(json: String): PersistedState {
+        JSONObject(json)
+        val output = file.startWrite()
+        try {
+            output.write(json.toByteArray(Charsets.UTF_8))
+            file.finishWrite(output)
+        } catch (error: Throwable) {
+            file.failWrite(output)
+            throw error
+        }
+        return load()
     }
 }
 
@@ -101,6 +129,7 @@ private fun JSONArray?.toSongList(): List<SongRef> = buildList {
                 artist = item.optString("artist", "Unknown artist"),
                 album = item.optString("album", "Unknown album"),
                 folderName = item.optString("folderName", "Music"),
+                genre = item.optString("genre", "Uncategorized"),
                 durationMs = item.optLong("durationMs", 0),
                 trackNumber = item.optInt("trackNumber", 0),
             ),
@@ -129,7 +158,7 @@ private fun JSONArray?.toPlaylists(): List<UserPlaylist> = buildList {
         val item = array.optJSONObject(index) ?: return@repeat
         val id = item.optString("id").takeIf(String::isNotBlank) ?: return@repeat
         val name = item.optString("name").takeIf(String::isNotBlank) ?: return@repeat
-        add(UserPlaylist(id, name, item.optJSONArray("songs").toStringList()))
+        add(UserPlaylist(id, name, item.optJSONArray("songs").toStringList(), item.optString("coverUri").takeIf(String::isNotBlank)))
     }
 }
 

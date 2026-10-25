@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <include domain="database" path="swipetune.db" />
+    <include domain="database" path="swipetune.db-wal" />
+    <include domain="database" path="swipetune.db-shm" />
+    <include domain="sharedpref" path="." />
+    <include domain="file" path="swipetune-state.json" />
+</full-backup-content>

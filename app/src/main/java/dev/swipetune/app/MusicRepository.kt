@@ -9,6 +9,7 @@ import android.util.LruCache
 import androidx.documentfile.provider.DocumentFile
 
 class MusicRepository(private val context: Context) {
+    private val indexer = LibraryIndexer(context)
     private val audioExtensions = setOf("mp3", "flac", "m4a", "aac", "wav", "ogg", "opus")
     private val artworkCache = object : LruCache<String, android.graphics.Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: android.graphics.Bitmap): Int = value.byteCount
@@ -31,6 +32,14 @@ class MusicRepository(private val context: Context) {
             }
         }
         return result.distinctBy(SongRef::uri).sortedBy { it.title.lowercase() }
+    }
+
+    suspend fun scanAndIndex(treeUri: Uri): List<SongRef> {
+        val started = System.currentTimeMillis()
+        val safSongs = scan(treeUri)
+        indexer.replaceSafRoot(treeUri.toString(), treeUri.lastPathSegment ?: "Music", safSongs, started)
+        val mediaStoreSongs = indexer.indexMediaStoreIfPermitted()
+        return (safSongs + mediaStoreSongs).distinctBy(SongRef::uri).sortedBy { it.title.lowercase() }
     }
 
     fun metadata(song: SongRef): TrackMetadata {
@@ -78,6 +87,8 @@ class MusicRepository(private val context: Context) {
                 album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
                     ?.takeIf(String::isNotBlank) ?: "Unknown album",
                 folderName = folderName,
+                genre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+                    ?.takeIf(String::isNotBlank) ?: "Uncategorized",
                 durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0,
                 trackNumber = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                     ?.substringBefore('/')?.toIntOrNull() ?: 0,

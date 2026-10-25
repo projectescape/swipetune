@@ -27,11 +27,17 @@ import java.util.UUID
 class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val store = SessionStore(application)
     private val repository = MusicRepository(application)
-    private val _state = MutableStateFlow(store.load().toUiState())
+    private val database = SwipeTuneDatabase.get(application)
+    private val playbackPreferencesStore = PlaybackPreferencesStore(application)
+    private val backupManager = AppBackupManager(application)
+    private val lyricsRepository = LyricsRepository(application)
+    private val m3uManager = M3uPlaylistManager(application)
+    private val _state = MutableStateFlow(store.load().toUiState().copy(playbackPreferences = playbackPreferencesStore.load()))
     val state: StateFlow<AppUiState> = _state.asStateFlow()
     private val controllerFuture: ListenableFuture<MediaController>
     private var player: MediaController? = null
     private var playbackQueue: List<SongRef> = emptyList()
+    private var queueUndo: QueueSnapshot? = null
     private val loadingArtwork = mutableSetOf<String>()
     private var reviewModeActive = false
     private var normalPlayback: NormalPlaybackSnapshot? = null
@@ -71,6 +77,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            LegacyStateMigrator(database).migrate(store.load())
+        }
+        viewModelScope.launch {
+            database.libraryDao().observeRecent().collect { history ->
+                _state.update { it.copy(recentHistory = history) }
+            }
+        }
         val token = SessionToken(application, ComponentName(application, PlaybackService::class.java))
         controllerFuture = MediaController.Builder(application, token).buildAsync()
         controllerFuture.addListener(
@@ -97,7 +111,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _state.update { it.copy(isScanning = true, errorMessage = null, statusMessage = "Scanning folder…") }
             runCatching {
-                val songs = withContext(Dispatchers.IO) { repository.scan(uri) }
+                val songs = withContext(Dispatchers.IO) { repository.scanAndIndex(uri) }
                 val old = _state.value
                 val validUris = songs.mapTo(hashSetOf(), SongRef::uri)
                 val decisions = old.decisions.filterKeys(validUris::contains)
@@ -113,6 +127,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     },
                     themeMode = old.themeMode,
                     dynamicColor = old.dynamicColor,
+                    artworkAtmosphere = old.artworkAtmosphere,
+                    expressiveMotion = old.expressiveMotion,
+                    compactLibraryRows = old.compactLibraryRows,
                 )
             }.onSuccess { persisted ->
                 saveAndShow(persisted)
@@ -243,6 +260,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val index = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId == uri
         } ?: return
+        rememberQueueForUndo(player)
         if (player.mediaItemCount == 1) {
             player.stop()
             player.clearMediaItems()
@@ -250,6 +268,112 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         } else {
             player.removeMediaItem(index)
             syncQueueFromPlayer()
+        }
+    }
+
+    fun playNext(songs: List<SongRef>) {
+        val player = player ?: return
+        if (songs.isEmpty()) return
+        rememberQueueForUndo(player)
+        val insertAt = (player.currentMediaItemIndex + 1).coerceAtMost(player.mediaItemCount)
+        player.addMediaItems(insertAt, songs.map(::mediaItem))
+        syncQueueFromPlayer()
+    }
+
+    fun appendToQueue(songs: List<SongRef>) {
+        val player = player ?: return
+        if (songs.isEmpty()) return
+        rememberQueueForUndo(player)
+        player.addMediaItems(songs.map(::mediaItem))
+        syncQueueFromPlayer()
+    }
+
+    fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        val player = player ?: return
+        if (fromIndex !in 0 until player.mediaItemCount || toIndex !in 0 until player.mediaItemCount || fromIndex == toIndex) return
+        rememberQueueForUndo(player)
+        player.moveMediaItem(fromIndex, toIndex)
+        syncQueueFromPlayer()
+    }
+
+    fun clearUpcomingQueue() {
+        val player = player ?: return
+        val current = player.currentMediaItemIndex
+        if (current < 0 || player.mediaItemCount <= 1) return
+        rememberQueueForUndo(player)
+        if (current + 1 < player.mediaItemCount) player.removeMediaItems(current + 1, player.mediaItemCount)
+        if (current > 0) player.removeMediaItems(0, current)
+        syncQueueFromPlayer()
+    }
+
+    fun undoQueueEdit() {
+        val player = player ?: return
+        val snapshot = queueUndo ?: return
+        queueUndo = null
+        player.setMediaItems(snapshot.items, snapshot.index.coerceIn(0, (snapshot.items.size - 1).coerceAtLeast(0)), snapshot.positionMs)
+        player.prepare()
+        player.playWhenReady = snapshot.playWhenReady
+        syncQueueFromPlayer()
+    }
+
+    fun saveQueueAsPlaylist(name: String) {
+        val cleanName = name.trim()
+        val player = player ?: return
+        if (cleanName.isBlank() || player.mediaItemCount == 0) return
+        val uris = List(player.mediaItemCount) { player.getMediaItemAt(it).mediaId }.filter(String::isNotBlank)
+        val current = _state.value.toPersisted()
+        saveAndShow(
+            current.copy(playlists = current.playlists + UserPlaylist(UUID.randomUUID().toString(), cleanName, uris)),
+        )
+    }
+
+    fun toggleSongSelection(song: SongRef) = _state.update { current ->
+        current.copy(
+            selectedSongUris = if (song.uri in current.selectedSongUris) {
+                current.selectedSongUris - song.uri
+            } else {
+                current.selectedSongUris + song.uri
+            },
+        )
+    }
+
+    fun clearSongSelection() = _state.update { it.copy(selectedSongUris = emptySet()) }
+
+    fun playSelectedNext() {
+        playNext(_state.value.selectedSongs())
+        clearSongSelection()
+    }
+
+    fun appendSelected() {
+        appendToQueue(_state.value.selectedSongs())
+        clearSongSelection()
+    }
+
+    fun favoriteSelected() {
+        val selected = _state.value.selectedSongUris
+        if (selected.isEmpty()) return
+        val current = _state.value.toPersisted()
+        saveAndShow(current.copy(favorites = current.favorites + selected))
+        clearSongSelection()
+    }
+
+    fun rejectSelected() {
+        val selected = _state.value.selectedSongUris
+        if (selected.isEmpty()) return
+        val current = _state.value.toPersisted()
+        saveAndShow(
+            current.copy(
+                decisions = current.decisions + selected.associateWith { ReviewDecision.REJECTED },
+                history = current.history + selected.map { ReviewEntry(it, ReviewDecision.REJECTED) },
+            ),
+        )
+        clearSongSelection()
+    }
+
+    fun findDuplicates() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val groups = DuplicateFinder.find(_state.value.visibleSongs)
+            _state.update { it.copy(duplicateGroups = groups, statusMessage = "Found ${groups.size} duplicate groups") }
         }
     }
 
@@ -299,6 +423,80 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun movePlaylistSong(playlistId: String, fromIndex: Int, toIndex: Int) {
+        val current = _state.value.toPersisted()
+        saveAndShow(current.copy(playlists = current.playlists.map { playlist ->
+            if (playlist.id != playlistId || fromIndex !in playlist.songUris.indices || toIndex !in playlist.songUris.indices) playlist
+            else playlist.copy(songUris = playlist.songUris.toMutableList().apply { add(toIndex, removeAt(fromIndex)) })
+        }))
+    }
+
+    fun duplicatePlaylist(playlistId: String) {
+        val current = _state.value.toPersisted()
+        val source = current.playlists.firstOrNull { it.id == playlistId } ?: return
+        saveAndShow(
+            current.copy(
+                playlists = current.playlists + source.copy(
+                    id = UUID.randomUUID().toString(),
+                    name = "${source.name} copy",
+                ),
+            ),
+        )
+    }
+
+    fun quickFillPlaylist(playlistId: String) {
+        val current = _state.value.toPersisted()
+        val source = current.playlists.firstOrNull { it.id == playlistId } ?: return
+        val existingSongs = source.songUris.mapNotNull { uri -> current.songs.firstOrNull { it.uri == uri } }
+        val artists = existingSongs.map { it.artist }.toSet()
+        val albums = existingSongs.map { it.album }.toSet()
+        val additions = current.songs.asSequence()
+            .filter { it.uri !in source.songUris && (it.artist in artists || it.album in albums) }
+            .map(SongRef::uri)
+            .take(25)
+            .toList()
+        saveAndShow(current.copy(playlists = current.playlists.map {
+            if (it.id == playlistId) it.copy(songUris = it.songUris + additions) else it
+        }))
+    }
+
+    fun mergePlaylist(targetId: String, sourceId: String) {
+        val current = _state.value.toPersisted()
+        val source = current.playlists.firstOrNull { it.id == sourceId } ?: return
+        saveAndShow(current.copy(playlists = current.playlists.map { target ->
+            if (target.id == targetId) target.copy(songUris = (target.songUris + source.songUris).distinct()) else target
+        }))
+    }
+
+    fun setPlaylistCover(playlistId: String, uri: Uri) {
+        val current = _state.value.toPersisted()
+        saveAndShow(current.copy(playlists = current.playlists.map {
+            if (it.id == playlistId) it.copy(coverUri = uri.toString()) else it
+        }))
+    }
+
+    fun exportPlaylist(playlistId: String, destination: Uri) {
+        val state = _state.value
+        val playlist = state.playlists.firstOrNull { it.id == playlistId } ?: return
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { m3uManager.export(destination, playlist, state.songs) } }
+                .onSuccess { _state.update { it.copy(statusMessage = "Playlist exported") } }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.message ?: "Could not export playlist") } }
+        }
+    }
+
+    fun importPlaylist(source: Uri) {
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { m3uManager.import(source, _state.value.songs) } }
+                .onSuccess { (name, uris) ->
+                    val current = _state.value.toPersisted()
+                    saveAndShow(current.copy(playlists = current.playlists + UserPlaylist(UUID.randomUUID().toString(), name, uris)))
+                    _state.update { it.copy(statusMessage = "Imported ${uris.size} songs") }
+                }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.message ?: "Could not import playlist") } }
+        }
+    }
+
     fun requestArtwork(song: SongRef) {
         if (song.uri in _state.value.artworkByUri || !loadingArtwork.add(song.uri)) return
         viewModelScope.launch {
@@ -314,6 +512,60 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setDynamicColor(enabled: Boolean) {
         saveAndShow(_state.value.toPersisted().copy(dynamicColor = enabled))
+    }
+
+    fun setArtworkAtmosphere(enabled: Boolean) = saveAndShow(_state.value.toPersisted().copy(artworkAtmosphere = enabled))
+    fun setExpressiveMotion(enabled: Boolean) = saveAndShow(_state.value.toPersisted().copy(expressiveMotion = enabled))
+    fun setCompactLibraryRows(enabled: Boolean) = saveAndShow(_state.value.toPersisted().copy(compactLibraryRows = enabled))
+
+    fun updatePlaybackPreferences(transform: (PlaybackPreferences) -> PlaybackPreferences) {
+        val updated = transform(_state.value.playbackPreferences)
+        playbackPreferencesStore.save(updated)
+        _state.update { it.copy(playbackPreferences = updated) }
+        getApplication<Application>().startService(
+            android.content.Intent(getApplication(), PlaybackService::class.java).setAction(PlaybackService.ACTION_REFRESH_FEATURES),
+        )
+    }
+
+    fun setSleepTimer(minutes: Int) {
+        updatePlaybackPreferences {
+            it.copy(sleepDeadlineMs = if (minutes <= 0) 0 else System.currentTimeMillis() + minutes * 60_000L)
+        }
+    }
+
+    fun exportBackup(uri: Uri) {
+        viewModelScope.launch {
+            _state.update { it.copy(statusMessage = "Creating backup…", errorMessage = null) }
+            runCatching { withContext(Dispatchers.IO) { backupManager.export(uri) } }
+                .onSuccess { _state.update { it.copy(statusMessage = "Backup saved") } }
+                .onFailure { error -> _state.update { it.copy(statusMessage = null, errorMessage = error.message ?: "Could not create backup") } }
+        }
+    }
+
+    fun importBackup(uri: Uri) {
+        viewModelScope.launch {
+            _state.update { it.copy(statusMessage = "Checking backup…", errorMessage = null) }
+            runCatching { withContext(Dispatchers.IO) { backupManager.restore(uri) } }
+                .onSuccess { restored ->
+                    saveAndShow(restored)
+                    _state.update {
+                        it.copy(
+                            playbackPreferences = playbackPreferencesStore.load(),
+                            statusMessage = "Backup restored",
+                        )
+                    }
+                }
+                .onFailure { error -> _state.update { it.copy(statusMessage = null, errorMessage = error.message ?: "Could not restore backup") } }
+        }
+    }
+
+    fun importLyrics(uri: Uri) {
+        val trackUri = _state.value.nowPlayingUri ?: return
+        viewModelScope.launch {
+            runCatching { withContext(Dispatchers.IO) { lyricsRepository.import(trackUri, uri) } }
+                .onSuccess { lines -> _state.update { it.copy(lyrics = lines, statusMessage = "Lyrics imported") } }
+                .onFailure { error -> _state.update { it.copy(errorMessage = error.message ?: "Could not import lyrics") } }
+        }
     }
 
     fun rescanLibrary() {
@@ -409,6 +661,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             playbackQueue = playback.playbackQueue,
             shuffleEnabled = playback.shuffleEnabled,
             repeatMode = playback.repeatMode,
+            playbackPreferences = playback.playbackPreferences,
+            recentHistory = playback.recentHistory,
+            lyrics = playback.lyrics,
+            selectedSongUris = playback.selectedSongUris,
+            duplicateGroups = playback.duplicateGroups,
         )
     }
 
@@ -428,20 +685,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = null,
             )
         }
-        val items = songs.map { song ->
-            MediaItem.Builder()
-                .setUri(song.uri)
-                .setMediaId(song.uri)
-                .setMediaMetadata(
-                    MediaMetadata.Builder()
-                        .setTitle(song.title)
-                        .setArtist(song.artist)
-                        .setAlbumTitle(song.album)
-                        .setTrackNumber(song.trackNumber.takeIf { it > 0 })
-                        .build(),
-                )
-                .build()
-        }
+        val items = songs.map(::mediaItem)
         player.setMediaItems(items, startIndex, 0)
         player.prepare()
         player.playWhenReady = autoplay
@@ -453,17 +697,20 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 nowPlayingUri = song.uri,
                 metadata = TrackMetadata(song.title, song.artist, song.album, it.artworkByUri[song.uri]),
+                lyrics = emptyList(),
             )
         }
         viewModelScope.launch {
             val metadata = runCatching { withContext(Dispatchers.IO) { repository.metadata(song) } }
                 .getOrElse { TrackMetadata(song.title, song.artist, song.album) }
+            val lyrics = withContext(Dispatchers.IO) { lyricsRepository.load(song.uri) }
             if (_state.value.nowPlayingUri == song.uri) {
                 _state.update { current ->
                     current.copy(
                         metadata = metadata,
                         artworkByUri = metadata.artwork?.let { current.artworkByUri + (song.uri to it) }
                             ?: current.artworkByUri,
+                        lyrics = lyrics,
                     )
                 }
             }
@@ -490,6 +737,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 positionMs = 0,
                 durationMs = 0,
                 playbackQueue = emptyList(),
+                lyrics = emptyList(),
             )
         }
     }
@@ -527,6 +775,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playbackQueue = queueUris.mapNotNull { uri -> _state.value.songs.firstOrNull { it.uri == uri } }
         _state.update { it.copy(playbackQueue = queueUris) }
     }
+
+    private fun mediaItem(song: SongRef): MediaItem = MediaItem.Builder()
+        .setUri(song.uri)
+        .setMediaId(song.uri)
+        .setMediaMetadata(
+            MediaMetadata.Builder()
+                .setTitle(song.title)
+                .setArtist(song.artist)
+                .setAlbumTitle(song.album)
+                .setTrackNumber(song.trackNumber.takeIf { it > 0 })
+                .build(),
+        )
+        .build()
+
+    private fun rememberQueueForUndo(player: Player) {
+        queueUndo = QueueSnapshot(
+            items = List(player.mediaItemCount, player::getMediaItemAt),
+            index = player.currentMediaItemIndex.coerceAtLeast(0),
+            positionMs = player.currentPosition.coerceAtLeast(0),
+            playWhenReady = player.playWhenReady,
+        )
+    }
 }
 
 private fun PersistedState.toUiState() = AppUiState(
@@ -540,6 +810,9 @@ private fun PersistedState.toUiState() = AppUiState(
     playlists = playlists,
     themeMode = themeMode,
     dynamicColor = dynamicColor,
+    artworkAtmosphere = artworkAtmosphere,
+    expressiveMotion = expressiveMotion,
+    compactLibraryRows = compactLibraryRows,
 )
 
 private fun AppUiState.toPersisted() = PersistedState(
@@ -553,6 +826,9 @@ private fun AppUiState.toPersisted() = PersistedState(
     playlists = playlists,
     themeMode = themeMode,
     dynamicColor = dynamicColor,
+    artworkAtmosphere = artworkAtmosphere,
+    expressiveMotion = expressiveMotion,
+    compactLibraryRows = compactLibraryRows,
 )
 
 private fun Int.toAppRepeatMode(): RepeatMode = when (this) {
@@ -569,4 +845,13 @@ private data class NormalPlaybackSnapshot(
     val shuffle: Boolean,
     val repeatMode: Int,
 )
+
+private data class QueueSnapshot(
+    val items: List<MediaItem>,
+    val index: Int,
+    val positionMs: Long,
+    val playWhenReady: Boolean,
+)
+
+private fun AppUiState.selectedSongs(): List<SongRef> = visibleSongs.filter { it.uri in selectedSongUris }
 

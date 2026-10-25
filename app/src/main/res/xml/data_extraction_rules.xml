@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup disableIfNoEncryptionCapabilities="true">
+        <include domain="database" path="swipetune.db" />
+        <include domain="database" path="swipetune.db-wal" />
+        <include domain="database" path="swipetune.db-shm" />
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="swipetune-state.json" />
+    </cloud-backup>
+    <device-transfer>
+        <include domain="database" path="swipetune.db" />
+        <include domain="database" path="swipetune.db-wal" />
+        <include domain="database" path="swipetune.db-shm" />
+        <include domain="sharedpref" path="." />
+        <include domain="file" path="swipetune-state.json" />
+    </device-transfer>
+</data-extraction-rules>

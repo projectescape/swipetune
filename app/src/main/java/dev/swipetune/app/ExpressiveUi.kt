@@ -1,6 +1,8 @@
 package dev.swipetune.app
 
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
@@ -17,6 +19,8 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -38,6 +42,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -57,6 +62,7 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.LibraryMusic
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MoreVert
@@ -82,6 +88,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -120,6 +128,7 @@ import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.semantics.Role
@@ -129,6 +138,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private enum class ExpressiveScreen { LIBRARY, REVIEW, REJECTED, SETTINGS }
@@ -188,8 +199,12 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                     targetState = screen,
                     modifier = Modifier.padding(padding),
                     transitionSpec = {
-                        (fadeIn(tween(260)) + scaleIn(tween(320), initialScale = .985f)) togetherWith
-                            (fadeOut(tween(170)) + scaleOut(tween(170), targetScale = 1.015f))
+                        if (state.expressiveMotion) {
+                            (fadeIn(tween(260)) + scaleIn(tween(320), initialScale = .985f)) togetherWith
+                                (fadeOut(tween(170)) + scaleOut(tween(170), targetScale = 1.015f))
+                        } else {
+                            fadeIn(tween(100)) togetherWith fadeOut(tween(100))
+                        }
                     },
                     label = "screen",
                 ) { destination ->
@@ -217,7 +232,7 @@ private fun LivingBackdrop(state: AppUiState) {
             .fillMaxSize()
             .background(Brush.verticalGradient(listOf(colors.surface, colors.background))),
     ) {
-        state.metadata?.artwork?.let { bitmap ->
+        state.metadata?.artwork?.takeIf { state.artworkAtmosphere }?.let { bitmap ->
             Image(
                 bitmap = bitmap.asImageBitmap(),
                 contentDescription = null,
@@ -439,7 +454,7 @@ private fun ExpressiveLoading(modifier: Modifier = Modifier) {
 }
 
 private enum class LibraryView(val label: String) {
-    SONGS("Songs"), ALBUMS("Albums"), ARTISTS("Artists"), FOLDERS("Folders"), FAVORITES("Favorites"), PLAYLISTS("Playlists")
+    SONGS("Songs"), ALBUMS("Albums"), ARTISTS("Artists"), GENRES("Genres"), FOLDERS("Folders"), FAVORITES("Favorites"), HISTORY("History"), PLAYLISTS("Playlists")
 }
 
 private enum class LibrarySort(val label: String) { TITLE("Title"), ARTIST("Artist"), ALBUM("Album") }
@@ -454,11 +469,14 @@ private fun ExpressiveLibrary(
     var query by rememberSaveable { mutableStateOf("") }
     var sort by rememberSaveable { mutableStateOf(LibrarySort.TITLE) }
     var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
+    var selectedCollection by rememberSaveable { mutableStateOf<String?>(null) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
     val filtered = remember(state.visibleSongs, query, sort, libraryView, state.favorites) {
-        val source = if (libraryView == LibraryView.FAVORITES) {
-            state.visibleSongs.filter { it.uri in state.favorites }
-        } else state.visibleSongs
+        val source = when (libraryView) {
+            LibraryView.FAVORITES -> state.visibleSongs.filter { it.uri in state.favorites }
+            LibraryView.HISTORY -> state.recentHistory.mapNotNull { event -> state.visibleSongs.firstOrNull { it.uri == event.trackUri } }
+            else -> state.visibleSongs
+        }
         source.filter { song ->
             query.isBlank() || listOf(song.title, song.artist, song.album, song.folderName)
                 .any { it.contains(query, ignoreCase = true) }
@@ -528,7 +546,41 @@ private fun ExpressiveLibrary(
             }
         }
 
-        if (libraryView == LibraryView.PLAYLISTS) {
+        AnimatedVisibility(visible = state.selectedSongUris.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth()) {
+                Text("${state.selectedSongUris.size} selected", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelLarge)
+                LazyRow(
+                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    item { TextButton(onClick = viewModel::playSelectedNext) { Text("Play next") } }
+                    item { TextButton(onClick = viewModel::appendSelected) { Text("Add to queue") } }
+                    item { TextButton(onClick = viewModel::favoriteSelected) { Text("Favorite") } }
+                    item { TextButton(onClick = viewModel::rejectSelected) { Text("Reject") } }
+                    item { TextButton(onClick = viewModel::clearSongSelection) { Text("Clear") } }
+                }
+            }
+        }
+
+        val collectionGroups = when (libraryView) {
+            LibraryView.ALBUMS -> filtered.groupBy(SongRef::album)
+            LibraryView.ARTISTS -> filtered.groupBy(SongRef::artist)
+            LibraryView.GENRES -> filtered.groupBy(SongRef::genre)
+            LibraryView.FOLDERS -> filtered.groupBy(SongRef::folderName)
+            else -> emptyMap()
+        }
+        val selectedSongs = selectedCollection?.let(collectionGroups::get)
+
+        if (selectedSongs != null) {
+            CollectionDetail(
+                name = selectedCollection.orEmpty(),
+                songs = selectedSongs,
+                state = state,
+                viewModel = viewModel,
+                onBack = { selectedCollection = null },
+                modifier = Modifier.weight(1f),
+            )
+        } else if (libraryView == LibraryView.PLAYLISTS) {
             ExpressivePlaylists(
                 state = state,
                 viewModel = viewModel,
@@ -543,7 +595,7 @@ private fun ExpressiveLibrary(
             EmptyLibraryResult(query, libraryView, Modifier.weight(1f))
         } else {
             when (libraryView) {
-                LibraryView.SONGS, LibraryView.FAVORITES -> LazyColumn(
+                LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> LazyColumn(
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
@@ -558,6 +610,7 @@ private fun ExpressiveLibrary(
                     viewModel = viewModel,
                     modifier = Modifier.weight(1f),
                     icon = Icons.Default.Album,
+                    onOpen = { selectedCollection = it },
                 )
                 LibraryView.ARTISTS -> LibraryCollections(
                     groups = filtered.groupBy(SongRef::artist),
@@ -565,6 +618,15 @@ private fun ExpressiveLibrary(
                     viewModel = viewModel,
                     modifier = Modifier.weight(1f),
                     icon = Icons.Default.Person,
+                    onOpen = { selectedCollection = it },
+                )
+                LibraryView.GENRES -> LibraryCollections(
+                    groups = filtered.groupBy(SongRef::genre),
+                    state = state,
+                    viewModel = viewModel,
+                    modifier = Modifier.weight(1f),
+                    icon = Icons.Default.GraphicEq,
+                    onOpen = { selectedCollection = it },
                 )
                 LibraryView.FOLDERS -> LibraryCollections(
                     groups = filtered.groupBy(SongRef::folderName),
@@ -572,6 +634,7 @@ private fun ExpressiveLibrary(
                     viewModel = viewModel,
                     modifier = Modifier.weight(1f),
                     icon = Icons.Default.Folder,
+                    onOpen = { selectedCollection = it },
                 )
                 LibraryView.PLAYLISTS -> Unit
             }
@@ -613,6 +676,15 @@ private fun ExpressivePlaylists(
     onCreate: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val importM3u = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> uri?.let(viewModel::importPlaylist) }
+    val exportM3u = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("audio/x-mpegurl")) { uri ->
+        val id = selectedPlaylistId
+        if (uri != null && id != null) viewModel.exportPlaylist(id, uri)
+    }
+    val coverPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val id = selectedPlaylistId
+        if (uri != null && id != null) viewModel.setPlaylistCover(id, uri)
+    }
     val selected = state.playlists.firstOrNull { it.id == selectedPlaylistId }
     if (selected == null) {
         Column(modifier) {
@@ -625,6 +697,9 @@ private fun ExpressivePlaylists(
                     Icon(Icons.Default.Add, null)
                     Spacer(Modifier.width(6.dp))
                     Text("New")
+                }
+                IconButton(onClick = { importM3u.launch(arrayOf("audio/x-mpegurl", "audio/mpegurl", "text/plain")) }) {
+                    Icon(Icons.Default.Add, "Import M3U playlist")
                 }
             }
             if (state.playlists.isEmpty()) {
@@ -660,7 +735,9 @@ private fun ExpressivePlaylists(
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             val first = songs.firstOrNull()
-                            if (first != null) {
+                            if (playlist.coverUri != null) {
+                                PlaylistCover(playlist.coverUri, Modifier.size(62.dp))
+                            } else if (first != null) {
                                 LibraryArtwork(first, state, viewModel, Modifier.size(62.dp), RoundedCornerShape(18.dp), Icons.AutoMirrored.Filled.QueueMusic)
                             } else {
                                 Surface(Modifier.size(62.dp), RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
@@ -699,6 +776,19 @@ private fun ExpressivePlaylists(
                 Icon(Icons.Default.PlayArrow, "Play playlist")
             }
         }
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            item { OutlinedButton(onClick = { viewModel.duplicatePlaylist(selected.id) }) { Text("Duplicate") } }
+            item { OutlinedButton(onClick = { viewModel.quickFillPlaylist(selected.id) }) { Text("Quick Fill") } }
+            item { OutlinedButton(onClick = { coverPicker.launch(arrayOf("image/*")) }) { Text("Cover") } }
+            item { OutlinedButton(onClick = { exportM3u.launch("${selected.name}.m3u8") }) { Text("Export M3U") } }
+            val mergeSource = state.playlists.firstOrNull { it.id != selected.id }
+            if (mergeSource != null) {
+                item { OutlinedButton(onClick = { viewModel.mergePlaylist(selected.id, mergeSource.id) }) { Text("Merge ${mergeSource.name}") } }
+            }
+        }
         if (songs.isEmpty()) {
             Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center) {
                 Text("This playlist is empty", style = MaterialTheme.typography.headlineSmall)
@@ -709,7 +799,7 @@ private fun ExpressivePlaylists(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                items(songs, key = SongRef::uri) { song ->
+                itemsIndexed(songs, key = { _, song -> song.uri }) { index, song ->
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -719,6 +809,8 @@ private fun ExpressivePlaylists(
                             Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        TextButton(onClick = { viewModel.movePlaylistSong(selected.id, index, index - 1) }, enabled = index > 0) { Text("↑") }
+                        TextButton(onClick = { viewModel.movePlaylistSong(selected.id, index, index + 1) }, enabled = index < songs.lastIndex) { Text("↓") }
                         IconButton(onClick = { viewModel.removeFromPlaylist(selected.id, song) }) {
                             Icon(Icons.Default.Close, "Remove ${song.title} from playlist")
                         }
@@ -743,6 +835,23 @@ private fun ExpressivePlaylists(
 }
 
 @Composable
+private fun PlaylistCover(uri: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    var bitmap by remember(uri) { mutableStateOf<android.graphics.Bitmap?>(null) }
+    LaunchedEffect(uri) {
+        bitmap = withContext(Dispatchers.IO) {
+            runCatching {
+                context.contentResolver.openInputStream(android.net.Uri.parse(uri))?.use(android.graphics.BitmapFactory::decodeStream)
+            }.getOrNull()
+        }
+    }
+    Surface(modifier, RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+        bitmap?.let { Image(it.asImageBitmap(), "Custom playlist cover", Modifier.fillMaxSize(), contentScale = ContentScale.Crop) }
+            ?: Box(contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }
+    }
+}
+
+@Composable
 private fun EmptyLibraryResult(query: String, view: LibraryView, modifier: Modifier = Modifier) {
     Column(modifier.fillMaxWidth().padding(32.dp), verticalArrangement = Arrangement.Center) {
         Icon(Icons.Default.Search, null, Modifier.size(44.dp), tint = MaterialTheme.colorScheme.primary)
@@ -759,6 +868,7 @@ private fun LibraryCollections(
     viewModel: MusicViewModel,
     modifier: Modifier = Modifier,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
+    onOpen: (String) -> Unit,
 ) {
     LazyColumn(
         modifier = modifier,
@@ -768,7 +878,7 @@ private fun LibraryCollections(
         items(groups.entries.sortedBy { it.key.lowercase() }, key = { it.key }) { (name, songs) ->
             val first = songs.minWithOrNull(compareBy<SongRef>({ it.trackNumber.takeIf { number -> number > 0 } ?: Int.MAX_VALUE }, { it.title })) ?: return@items
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable { viewModel.playCollection(songs, first) }.padding(10.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable { onOpen(name) }.padding(10.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LibraryArtwork(first, state, viewModel, Modifier.size(62.dp), RoundedCornerShape(18.dp), icon)
@@ -776,7 +886,42 @@ private fun LibraryCollections(
                     Text(name, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.titleMedium)
                     Text("${songs.size} ${if (songs.size == 1) "song" else "songs"}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Icon(Icons.Default.PlayArrow, null, tint = MaterialTheme.colorScheme.primary)
+                FilledIconButton(onClick = { viewModel.playCollection(songs, first) }) {
+                    Icon(Icons.Default.PlayArrow, "Play $name")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CollectionDetail(
+    name: String,
+    songs: List<SongRef>,
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to collections") }
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("${songs.size} songs · ${formatExpressiveTime(songs.sumOf(SongRef::durationMs))}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = { viewModel.playNext(songs) }) { Icon(Icons.AutoMirrored.Filled.QueueMusic, "Play next") }
+            FilledIconButton(onClick = { viewModel.playCollection(songs) }) { Icon(Icons.Default.PlayArrow, "Play $name") }
+        }
+        LazyColumn(
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            items(songs, key = SongRef::uri) { song ->
+                ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
             }
         }
     }
@@ -796,25 +941,34 @@ private fun EmptyLibrary(modifier: Modifier = Modifier) {
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: MusicViewModel, onClick: () -> Unit) {
     var showMenu by remember(song.uri) { mutableStateOf(false) }
-    val selected = song.uri == state.nowPlayingUri
-    val shape = RoundedCornerShape(if (selected) 22.dp else 14.dp)
-    val container = if (selected) MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .82f) else Color.Transparent
+    val playing = song.uri == state.nowPlayingUri
+    val selected = song.uri in state.selectedSongUris
+    val shape = RoundedCornerShape(if (playing || selected) 22.dp else 14.dp)
+    val container = when {
+        selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = .92f)
+        playing -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .82f)
+        else -> Color.Transparent
+    }
     Row(
         Modifier
             .fillMaxWidth()
             .clip(shape)
             .background(container)
-            .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
+            .combinedClickable(
+                onClick = { if (state.selectedSongUris.isEmpty()) onClick() else viewModel.toggleSongSelection(song) },
+                onLongClick = { viewModel.toggleSongSelection(song) },
+            )
+            .padding(horizontal = 12.dp, vertical = if (state.compactLibraryRows) 5.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(if (selected) 18.dp else 14.dp))
+        LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(if (playing || selected) 18.dp else 14.dp))
         Column(Modifier.weight(1f)) {
-            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (playing || selected) FontWeight.Bold else FontWeight.Normal)
             Text("${song.artist} · ${song.album}", maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
         IconButton(onClick = { viewModel.toggleFavorite(song) }) {
@@ -829,6 +983,16 @@ private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: Music
                 Icon(Icons.Default.MoreVert, "More options for ${song.title}")
             }
             DropdownMenu(expanded = showMenu, onDismissRequest = { showMenu = false }) {
+                DropdownMenuItem(
+                    text = { Text("Play next") },
+                    onClick = { viewModel.playNext(listOf(song)); showMenu = false },
+                    leadingIcon = { Icon(Icons.Default.SkipNext, null) },
+                )
+                DropdownMenuItem(
+                    text = { Text("Add to queue") },
+                    onClick = { viewModel.appendToQueue(listOf(song)); showMenu = false },
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
+                )
                 if (state.playlists.isEmpty()) {
                     DropdownMenuItem(
                         text = { Text("Create a playlist first") },
@@ -1098,7 +1262,7 @@ private fun DecisionPill(
 private fun ExpressiveArtwork(state: AppUiState, modifier: Modifier, shape: RoundedCornerShape) {
     val art = state.metadata?.artwork
     Box(
-        modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerHighest),
+        modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerLow),
         contentAlignment = Alignment.Center,
     ) {
         if (art != null) {
@@ -1113,7 +1277,7 @@ private fun ExpressiveArtwork(state: AppUiState, modifier: Modifier, shape: Roun
                 Icons.Default.GraphicEq,
                 contentDescription = null,
                 modifier = Modifier.size(72.dp),
-                tint = MaterialTheme.colorScheme.primary,
+                tint = MaterialTheme.colorScheme.primary.copy(alpha = .68f),
             )
         }
     }
@@ -1365,8 +1529,17 @@ private fun FullPlayerOverlay(
     onDismiss: () -> Unit,
 ) {
     var showQueue by remember { mutableStateOf(false) }
+    var showSaveQueue by remember { mutableStateOf(false) }
+    var showLyrics by remember { mutableStateOf(false) }
+    val lyricsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importLyrics)
+    }
     BackHandler {
-        if (showQueue) showQueue = false else onDismiss()
+        when {
+            showQueue -> showQueue = false
+            showLyrics -> showLyrics = false
+            else -> onDismiss()
+        }
     }
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -1391,7 +1564,11 @@ private fun FullPlayerOverlay(
                     }
                     Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            if (showQueue) "Up next" else "Now playing",
+                            when {
+                                showQueue -> "Up next"
+                                showLyrics -> "Lyrics"
+                                else -> "Now playing"
+                            },
                             style = MaterialTheme.typography.titleMedium,
                         )
                         if (!showQueue) {
@@ -1404,6 +1581,7 @@ private fun FullPlayerOverlay(
                             )
                         }
                     }
+                    TextButton(onClick = { showLyrics = !showLyrics; showQueue = false }) { Text("Lyrics") }
                     IconButton(onClick = { showQueue = !showQueue }) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, if (showQueue) "Hide queue" else "Show queue")
                     }
@@ -1422,12 +1600,20 @@ private fun FullPlayerOverlay(
                             Text("The queue is empty", style = MaterialTheme.typography.headlineSmall)
                         }
                     } else {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            OutlinedButton(onClick = viewModel::undoQueueEdit, modifier = Modifier.weight(1f)) { Text("Undo") }
+                            OutlinedButton(onClick = viewModel::clearUpcomingQueue, modifier = Modifier.weight(1f)) { Text("Clear") }
+                            Button(onClick = { showSaveQueue = true }, modifier = Modifier.weight(1f)) { Text("Save") }
+                        }
                         LazyColumn(
                             modifier = Modifier.weight(1f),
                             contentPadding = PaddingValues(vertical = 16.dp),
                             verticalArrangement = Arrangement.spacedBy(6.dp),
                         ) {
-                            items(queue, key = SongRef::uri) { song ->
+                            itemsIndexed(queue, key = { _, song -> song.uri }) { index, song ->
                                 val active = song.uri == state.nowPlayingUri
                                 Row(
                                     Modifier
@@ -1446,12 +1632,67 @@ private fun FullPlayerOverlay(
                                         Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
                                         Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
+                                    Column {
+                                        TextButton(
+                                            onClick = { viewModel.moveQueueItem(index, index - 1) },
+                                            enabled = index > 0,
+                                        ) { Text("↑") }
+                                        TextButton(
+                                            onClick = { viewModel.moveQueueItem(index, index + 1) },
+                                            enabled = index < queue.lastIndex,
+                                        ) { Text("↓") }
+                                    }
                                     IconButton(onClick = { viewModel.removeQueueItem(song.uri) }) {
                                         Icon(Icons.Default.Close, "Remove ${song.title} from queue")
                                     }
                                 }
                             }
                         }
+                    }
+                } else if (showLyrics) {
+                    if (state.lyrics.isEmpty()) {
+                        Column(
+                            Modifier.weight(1f).fillMaxWidth().padding(28.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Icon(Icons.Default.MusicNote, null, Modifier.size(56.dp), tint = MaterialTheme.colorScheme.primary)
+                            Spacer(Modifier.height(16.dp))
+                            Text("No local lyrics yet", style = MaterialTheme.typography.headlineSmall)
+                            Text("Import a plain text or synchronized .lrc file for this song.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Button(onClick = { lyricsPicker.launch(arrayOf("text/plain", "application/octet-stream")) }, modifier = Modifier.padding(top = 18.dp)) {
+                                Text("Import lyrics")
+                            }
+                        }
+                    } else {
+                        val activeIndex = state.lyrics.indexOfLast { line -> line.timestampMs?.let { it <= state.positionMs } == true }
+                        LazyColumn(
+                            modifier = Modifier.weight(1f).fillMaxWidth(),
+                            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 32.dp),
+                            verticalArrangement = Arrangement.spacedBy(18.dp),
+                        ) {
+                            itemsIndexed(state.lyrics) { index, line ->
+                                Text(
+                                    line.text,
+                                    style = if (index == activeIndex) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleLarge,
+                                    color = if (index == activeIndex) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable(enabled = line.timestampMs != null) { line.timestampMs?.let(viewModel::seekTo) }
+                                        .padding(vertical = 4.dp),
+                                )
+                            }
+                        }
+                    }
+                    ExpressiveSeekBar(state, viewModel, showTime = true)
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = viewModel::previousVisibleSong) { Icon(Icons.Default.SkipPrevious, "Previous song") }
+                        MorphingPlayButton(state.isPlaying, viewModel::togglePlayPause, Modifier.size(64.dp))
+                        IconButton(onClick = viewModel::nextVisibleSong) { Icon(Icons.Default.SkipNext, "Next song") }
                     }
                 } else {
                     BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
@@ -1528,6 +1769,22 @@ private fun FullPlayerOverlay(
             }
         }
     }
+    if (showSaveQueue) {
+        var name by remember { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = { showSaveQueue = false },
+            title = { Text("Save queue") },
+            text = {
+                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("Playlist name") }, singleLine = true)
+            },
+            confirmButton = {
+                Button(onClick = { viewModel.saveQueueAsPlaylist(name); showSaveQueue = false }, enabled = name.isNotBlank()) {
+                    Text("Save playlist")
+                }
+            },
+            dismissButton = { TextButton(onClick = { showSaveQueue = false }) { Text("Cancel") } },
+        )
+    }
 }
 
 @Composable
@@ -1536,6 +1793,12 @@ private fun ExpressiveSettings(
     viewModel: MusicViewModel,
     onChooseFolder: () -> Unit,
 ) {
+    val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
+        uri?.let(viewModel::exportBackup)
+    }
+    val importBackup = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        uri?.let(viewModel::importBackup)
+    }
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 28.dp),
@@ -1590,6 +1853,9 @@ private fun ExpressiveSettings(
                     }
                     Switch(checked = state.dynamicColor, onCheckedChange = viewModel::setDynamicColor)
                 }
+                AppearanceSwitch("Artwork atmosphere", "Use the current cover as a soft player backdrop.", state.artworkAtmosphere, viewModel::setArtworkAtmosphere)
+                AppearanceSwitch("Expressive motion", "Use container, shape, and shared-axis transitions.", state.expressiveMotion, viewModel::setExpressiveMotion)
+                AppearanceSwitch("Compact library rows", "Fit more songs on screen without shrinking touch targets.", state.compactLibraryRows, viewModel::setCompactLibraryRows)
             }
         }
         item {
@@ -1613,6 +1879,20 @@ private fun ExpressiveSettings(
                         Text("Folder")
                     }
                 }
+                OutlinedButton(
+                    onClick = viewModel::findDuplicates,
+                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                    shape = RoundedCornerShape(18.dp),
+                ) { Text("Find duplicates") }
+                state.duplicateGroups.take(3).forEach { group ->
+                    val keep = group.songs.firstOrNull { it.uri == group.recommendedKeepUri }
+                    Text(
+                        "${group.songs.size} copies · keep ${keep?.fileName ?: "highest quality"}",
+                        modifier = Modifier.padding(top = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
         item {
@@ -1622,6 +1902,163 @@ private fun ExpressiveSettings(
                     "Playback is shared with the lock screen, notification shade, Bluetooth, and headset controls.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 18.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Equalizer", style = MaterialTheme.typography.titleMedium)
+                        Text("Attach audio effects to this player’s active audio session.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(
+                        checked = state.playbackPreferences.equalizerEnabled,
+                        onCheckedChange = { enabled ->
+                            viewModel.updatePlaybackPreferences { it.copy(equalizerEnabled = enabled) }
+                        },
+                    )
+                }
+                if (state.playbackPreferences.equalizerEnabled) {
+                    var bassDragging by remember { mutableStateOf(false) }
+                    var loudnessDragging by remember { mutableStateOf(false) }
+                    val bassState = remember { SliderState(state.playbackPreferences.bassBoost.toFloat(), 0, 0f..1000f) }
+                    val loudnessState = remember { SliderState(state.playbackPreferences.loudnessGainMb.toFloat(), 0, 0f..2000f) }
+                    LaunchedEffect(state.playbackPreferences.bassBoost, bassDragging) {
+                        if (!bassDragging) bassState.value = state.playbackPreferences.bassBoost.toFloat()
+                    }
+                    LaunchedEffect(state.playbackPreferences.loudnessGainMb, loudnessDragging) {
+                        if (!loudnessDragging) loudnessState.value = state.playbackPreferences.loudnessGainMb.toFloat()
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(top = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Preset ${state.playbackPreferences.equalizerPreset + 1}", style = MaterialTheme.typography.labelLarge)
+                            Text("Uses the presets exposed by this phone.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                viewModel.updatePlaybackPreferences {
+                                    it.copy(equalizerPreset = ((it.equalizerPreset + 1) % 10).toShort())
+                                }
+                            },
+                        ) { Text("Next preset") }
+                    }
+                    Text("Bass boost", modifier = Modifier.padding(top = 14.dp), style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        state = bassState,
+                        onValueChange = { bassDragging = true },
+                        onValueChangeFinished = {
+                            bassDragging = false
+                            viewModel.updatePlaybackPreferences { it.copy(bassBoost = bassState.value.toInt().toShort()) }
+                        },
+                    )
+                    Text("Loudness", style = MaterialTheme.typography.labelLarge)
+                    Slider(
+                        state = loudnessState,
+                        onValueChange = { loudnessDragging = true },
+                        onValueChangeFinished = {
+                            loudnessDragging = false
+                            viewModel.updatePlaybackPreferences { it.copy(loudnessGainMb = loudnessState.value.toInt()) }
+                        },
+                    )
+                }
+                HorizontalDivider(Modifier.padding(vertical = 16.dp))
+                Text("Playback quality", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Tune decoding and transitions without changing your files.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                AppearanceSwitch(
+                    "ReplayGain",
+                    "Use embedded gain tags to reduce unexpectedly loud tracks.",
+                    state.playbackPreferences.replayGainEnabled,
+                ) { enabled -> viewModel.updatePlaybackPreferences { it.copy(replayGainEnabled = enabled) } }
+                AppearanceSwitch(
+                    "Gapless playback",
+                    "Ask compatible decoders to remove silence between consecutive tracks.",
+                    state.playbackPreferences.gaplessEnabled,
+                ) { enabled -> viewModel.updatePlaybackPreferences { it.copy(gaplessEnabled = enabled) } }
+                AppearanceSwitch(
+                    "Battery-friendly offload",
+                    "Let supported phones play audio on dedicated low-power hardware.",
+                    state.playbackPreferences.offloadEnabled,
+                ) { enabled -> viewModel.updatePlaybackPreferences { it.copy(offloadEnabled = enabled) } }
+                Text(
+                    if (state.playbackPreferences.crossfadeSeconds == 0) "Track transition · direct" else "Track transition · ${state.playbackPreferences.crossfadeSeconds}s fade",
+                    modifier = Modifier.padding(top = 16.dp),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(listOf(0, 2, 4, 6, 8)) { seconds ->
+                        FilterChip(
+                            selected = state.playbackPreferences.crossfadeSeconds == seconds,
+                            onClick = { viewModel.updatePlaybackPreferences { it.copy(crossfadeSeconds = seconds) } },
+                            label = { Text(if (seconds == 0) "Direct" else "${seconds}s") },
+                        )
+                    }
+                }
+                Text(
+                    "Fade transitions lower the ending track before advancing; true overlapping crossfade remains disabled to preserve one authoritative media session.",
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        item {
+            SettingsPanel("Sleep timer") {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Timer, null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        state.playbackPreferences.sleepDeadlineMs.takeIf { it > System.currentTimeMillis() }
+                            ?.let { "Stops in ${((it - System.currentTimeMillis()) / 60_000L).coerceAtLeast(1)} min" }
+                            ?: "Off",
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                }
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(listOf(15, 30, 45, 60, 0)) { minutes ->
+                        OutlinedButton(onClick = { viewModel.setSleepTimer(minutes) }) {
+                            Text(if (minutes == 0) "Turn off" else "$minutes min")
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            SettingsPanel("Backup & restore") {
+                Text(
+                    "Android can back up app data through your configured cloud transport. You can also keep a portable SwipeTune backup yourself.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Row(
+                    Modifier.fillMaxWidth().padding(top = 14.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Button(
+                        onClick = { exportBackup.launch("SwipeTune-backup.zip") },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Export") }
+                    OutlinedButton(
+                        onClick = { importBackup.launch(arrayOf("application/zip", "application/octet-stream")) },
+                        modifier = Modifier.weight(1f),
+                    ) { Text("Restore") }
+                }
+                Text(
+                    "Backups contain app metadata, playlists, Review decisions, history, and settings—not your audio files.",
+                    modifier = Modifier.padding(top = 10.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         }
@@ -1635,6 +2072,25 @@ private fun ExpressiveSettings(
                 Text("Version ${BuildConfig.VERSION_NAME}", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge)
             }
         }
+    }
+}
+
+@Composable
+private fun AppearanceSwitch(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
+        }
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
     }
 }
 
