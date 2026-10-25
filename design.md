@@ -63,6 +63,10 @@ The app must remain legible when artwork is missing, nearly black, or extremely 
 
 Use a 4 dp grid. Standard spacing values are 4, 8, 12, 16, 20, 24, 32, and 40 dp. Interactive targets are at least 48 dp. Edge padding is 16 dp on compact phones, 24 dp on medium layouts, and 32 dp on expanded layouts.
 
+- Every compact screen uses one 16 dp outer content rail. Lists keep that rail and add an 8 dp internal row inset; they do not invent 12 dp or 22 dp screen edges.
+- Contextual page headers keep the back action in its navigation slot and align the title and supporting copy to the same text rail.
+- Media rows may establish a second internal text rail after artwork, but titles and subtitles within that row always share it.
+
 ## Motion
 
 - Navigation uses a directional shared-axis transition: outgoing content recedes and fades while incoming content arrives from the navigation edge. Persistent playback chrome never disappears during the transition.

@@ -148,6 +148,9 @@ import kotlin.math.abs
 
 private enum class ExpressiveScreen { LIBRARY, REVIEW, REVIEW_DECISIONS, SETTINGS }
 
+private val ScreenEdge = 16.dp
+private val ListItemInset = 8.dp
+
 @Composable
 internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -291,6 +294,31 @@ private fun FrostedSurface(
 }
 
 @Composable
+private fun ContextPageHeader(
+    title: String,
+    supportingText: String,
+    backDescription: String,
+    onBack: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        IconButton(onClick = onBack) {
+            Icon(Icons.AutoMirrored.Filled.ArrowBack, backDescription)
+        }
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.headlineLarge)
+            Text(
+                supportingText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyLarge,
+            )
+        }
+    }
+}
+
+@Composable
 private fun ExpressiveOnboarding(onChooseFolder: () -> Unit) {
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -388,6 +416,13 @@ private fun ExpressiveLibrary(
     var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedCollection by rememberSaveable { mutableStateOf<String?>(null) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
+    val cycleSort = {
+        sort = when (sort) {
+            LibrarySort.TITLE -> LibrarySort.ARTIST
+            LibrarySort.ARTIST -> LibrarySort.ALBUM
+            LibrarySort.ALBUM -> LibrarySort.TITLE
+        }
+    }
     val filtered = remember(state.visibleSongs, query, sort, libraryView, state.favorites) {
         val source = when (libraryView) {
             LibraryView.FAVORITES -> state.visibleSongs.filter { it.uri in state.favorites }
@@ -411,42 +446,69 @@ private fun ExpressiveLibrary(
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
     ) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 18.dp, bottom = 12.dp),
-            verticalAlignment = Alignment.Bottom,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text("Your library", style = MaterialTheme.typography.headlineLarge)
-                Text(
-                    "${state.visibleSongs.size} songs · ${state.favorites.size} favorites",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-            }
-            IconButton(
-                onClick = {
-                    sort = when (sort) {
-                        LibrarySort.TITLE -> LibrarySort.ARTIST
-                        LibrarySort.ARTIST -> LibrarySort.ALBUM
-                        LibrarySort.ALBUM -> LibrarySort.TITLE
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 360.dp) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 12.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text("Your library", style = MaterialTheme.typography.headlineLarge, maxLines = 1)
+                            Text(
+                                "${state.visibleSongs.size} songs · ${state.favorites.size} favorites",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                        IconButton(onClick = onOpenSettings, modifier = Modifier.size(52.dp)) {
+                            Icon(Icons.Default.Settings, "Settings")
+                        }
                     }
-                },
-                modifier = Modifier.size(52.dp),
-            ) { Icon(Icons.Default.SortByAlpha, "Sort by ${sort.label}") }
-            FilledIconButton(
-                onClick = viewModel::shuffleLibrary,
-                modifier = Modifier.size(56.dp),
-                shape = RoundedCornerShape(20.dp),
-            ) { Icon(Icons.Default.Shuffle, "Play a random song") }
-            IconButton(onClick = onOpenSettings, modifier = Modifier.size(52.dp)) {
-                Icon(Icons.Default.Settings, "Settings")
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        IconButton(onClick = cycleSort, modifier = Modifier.size(52.dp)) {
+                            Icon(Icons.Default.SortByAlpha, "Sort by ${sort.label}")
+                        }
+                        FilledIconButton(
+                            onClick = viewModel::shuffleLibrary,
+                            modifier = Modifier.size(56.dp),
+                            shape = RoundedCornerShape(20.dp),
+                        ) { Icon(Icons.Default.Shuffle, "Play a random song") }
+                    }
+                }
+            } else {
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 16.dp),
+                    verticalAlignment = Alignment.Bottom,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Your library", style = MaterialTheme.typography.headlineLarge)
+                        Text(
+                            "${state.visibleSongs.size} songs · ${state.favorites.size} favorites",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                    IconButton(onClick = cycleSort, modifier = Modifier.size(52.dp)) {
+                        Icon(Icons.Default.SortByAlpha, "Sort by ${sort.label}")
+                    }
+                    FilledIconButton(
+                        onClick = viewModel::shuffleLibrary,
+                        modifier = Modifier.size(56.dp),
+                        shape = RoundedCornerShape(20.dp),
+                    ) { Icon(Icons.Default.Shuffle, "Play a random song") }
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(52.dp)) {
+                        Icon(Icons.Default.Settings, "Settings")
+                    }
+                }
             }
         }
 
         OutlinedTextField(
             value = query,
             onValueChange = { query = it },
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenEdge),
             singleLine = true,
             shape = RoundedCornerShape(22.dp),
             leadingIcon = { Icon(Icons.Default.Search, null) },
@@ -454,7 +516,7 @@ private fun ExpressiveLibrary(
         )
 
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+            contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(LibraryView.entries) { item ->
@@ -472,9 +534,9 @@ private fun ExpressiveLibrary(
 
         AnimatedVisibility(visible = state.selectedSongUris.isNotEmpty()) {
             Column(Modifier.fillMaxWidth()) {
-                Text("${state.selectedSongUris.size} selected", modifier = Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.labelLarge)
+                Text("${state.selectedSongUris.size} selected", modifier = Modifier.padding(horizontal = ScreenEdge), style = MaterialTheme.typography.labelLarge)
                 LazyRow(
-                    contentPadding = PaddingValues(horizontal = 10.dp),
+                    contentPadding = PaddingValues(horizontal = ScreenEdge),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     item { TextButton(onClick = viewModel::playSelectedNext) { Text("Play next") } }
@@ -521,7 +583,7 @@ private fun ExpressiveLibrary(
             when (libraryView) {
                 LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> LazyColumn(
                     modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                    contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     items(filtered, key = SongRef::uri) { song ->
@@ -632,7 +694,7 @@ private fun ExpressivePlaylists(
                 }
             }
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 item {
@@ -673,7 +735,7 @@ private fun ExpressivePlaylists(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(22.dp))
                                 .clickable { onSelectedPlaylist(playlist.id) }
-                                .padding(10.dp),
+                                .padding(ListItemInset),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             val first = songs.firstOrNull()
@@ -719,7 +781,7 @@ private fun ExpressivePlaylists(
     val songs = selected.songUris.mapNotNull { uri -> state.visibleSongs.firstOrNull { it.uri == uri } }
     Column(modifier) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = { onSelectedPlaylist(null) }) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to playlists") }
@@ -733,7 +795,7 @@ private fun ExpressivePlaylists(
             }
         }
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             item { OutlinedButton(onClick = { viewModel.duplicatePlaylist(selected.id) }) { Text("Duplicate") } }
@@ -752,12 +814,12 @@ private fun ExpressivePlaylists(
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 itemsIndexed(songs, key = { _, song -> song.uri }) { index, song ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(10.dp),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(ListItemInset),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(15.dp))
@@ -800,7 +862,7 @@ private fun SmartPlaylistRow(
     onOpen: () -> Unit,
 ) {
     Row(
-        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).clickable(onClick = onOpen).padding(10.dp),
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).clickable(onClick = onOpen).padding(ListItemInset),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         val first = songs.firstOrNull()
@@ -833,7 +895,7 @@ private fun SmartPlaylistDetail(
 ) {
     Column(modifier) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to playlists") }
@@ -850,7 +912,7 @@ private fun SmartPlaylistDetail(
         }
         Text(
             "Built in · updates automatically · cannot be deleted",
-            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            modifier = Modifier.padding(horizontal = ScreenEdge, vertical = 4.dp),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -861,12 +923,12 @@ private fun SmartPlaylistDetail(
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(songs, key = SongRef::uri) { song ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(10.dp),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(ListItemInset),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(15.dp))
@@ -922,13 +984,13 @@ private fun LibraryCollections(
 ) {
     LazyColumn(
         modifier = modifier,
-        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+        contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         items(groups.entries.sortedBy { it.key.lowercase() }, key = { it.key }) { (name, songs) ->
             val first = songs.minWithOrNull(compareBy<SongRef>({ it.trackNumber.takeIf { number -> number > 0 } ?: Int.MAX_VALUE }, { it.title })) ?: return@items
             Row(
-                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable { onOpen(name) }.padding(10.dp),
+                Modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).clickable { onOpen(name) }.padding(ListItemInset),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 LibraryArtwork(first, state, viewModel, Modifier.size(62.dp), RoundedCornerShape(18.dp), icon)
@@ -955,7 +1017,7 @@ private fun CollectionDetail(
 ) {
     Column(modifier) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 6.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to collections") }
@@ -967,7 +1029,7 @@ private fun CollectionDetail(
             FilledIconButton(onClick = { viewModel.playCollection(songs) }) { Icon(Icons.Default.PlayArrow, "Play $name") }
         }
         LazyColumn(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+            contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             items(songs, key = SongRef::uri) { song ->
@@ -1012,7 +1074,7 @@ private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: Music
                 onClick = { if (state.selectedSongUris.isEmpty()) onClick() else viewModel.toggleSongSelection(song) },
                 onLongClick = { viewModel.toggleSongSelection(song) },
             )
-            .padding(horizontal = 12.dp, vertical = if (state.compactLibraryRows) 5.dp else 10.dp),
+            .padding(horizontal = ListItemInset, vertical = if (state.compactLibraryRows) 5.dp else 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
@@ -1092,7 +1154,7 @@ private fun LibraryArtwork(
 @Composable
 private fun CompactGlassPlayer(state: AppUiState, viewModel: MusicViewModel, onOpenPlayer: () -> Unit) {
     FrostedSurface(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 8.dp),
         shape = RoundedCornerShape(topStart = 30.dp, topEnd = 30.dp, bottomEnd = 22.dp, bottomStart = 22.dp),
     ) {
         Column(Modifier.clickable(onClick = onOpenPlayer).padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -1503,15 +1565,12 @@ private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewMod
             .fillMaxSize()
             .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
     ) {
-        Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 18.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to Settings") }
-                Text("Review decisions", style = MaterialTheme.typography.headlineLarge)
-            }
-            Text(
-                "Accepted songs stay in your library. Rejected songs remain hidden until you clear their decision.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium,
+        Column(Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 18.dp)) {
+            ContextPageHeader(
+                title = "Review decisions",
+                supportingText = "Accepted songs stay in your library. Rejected songs remain hidden until you clear their decision.",
+                backDescription = "Back to Settings",
+                onBack = onBack,
             )
             Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
@@ -1557,12 +1616,12 @@ private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewMod
             }
         } else {
             LazyColumn(
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 items(songs, key = SongRef::uri) { song ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .56f)).padding(10.dp),
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .56f)).padding(ListItemInset),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Surface(Modifier.size(48.dp), RoundedCornerShape(15.dp), color = MaterialTheme.colorScheme.surfaceContainerHighest) {
@@ -1896,14 +1955,11 @@ private fun ExpressiveSettings(
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to library") }
-                Text("Settings", style = MaterialTheme.typography.headlineLarge)
-            }
-            Text(
-                "Make SwipeTune feel at home on this phone.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyLarge,
+            ContextPageHeader(
+                title = "Settings",
+                supportingText = "Make SwipeTune feel at home on this phone.",
+                backDescription = "Back to library",
+                onBack = onBack,
             )
         }
         item {

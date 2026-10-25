@@ -1,6 +1,14 @@
 [
   {
     "date": "2026-10-25",
+    "macrostructure": "Single-surface library with shared 16 dp alignment rails",
+    "theme": "studied-DNA (source: PixelPlayer 0.7.5-beta interaction video)",
+    "theme_axes": "dynamic / expressive-shape / artwork-atmospheric / motion-continuity",
+    "enrichment": "real album artwork and consistent contextual headers",
+    "brief": "Cross-screen alignment audit and text-rail normalization"
+  },
+  {
+    "date": "2026-10-25",
     "macrostructure": "Single-surface library with utility settings and contextual review",
     "theme": "studied-DNA (source: PixelPlayerOSS indexing source and PixelPlayer 0.7.5-beta interaction video)",
     "theme_axes": "dynamic / expressive-shape / artwork-atmospheric / motion-continuity",
