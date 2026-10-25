@@ -7,6 +7,7 @@ SwipeTune is a private, local-first Android music player with a swipe-based libr
 - Pick any music folder with Android's system folder picker.
 - Play local MP3, FLAC, M4A, AAC, WAV, and OGG files.
 - View embedded album art, title, artist, and album metadata.
+- Material 3 Expressive interface with dynamic color, album-art atmosphere, frosted floating controls, and spring motion.
 - Play/pause, seek, and jump backward or forward ten seconds.
 - Review songs in a persisted random, non-repeating order.
 - Swipe right to keep and left to reject.
@@ -21,7 +22,7 @@ Requirements: JDK 17, Android SDK 37, and build tools 36.0.0.
 
 ```bash
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
-./gradlew assembleDebug
+mise exec -- ./gradlew lintDebug test assembleDebug
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.

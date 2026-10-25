@@ -1,0 +1,9 @@
+{
+  "date": "2026-10-25",
+  "framework": "Jetpack Compose",
+  "font_stack": "Android platform sans with expressive weight and scale",
+  "palette": "Material dynamic color with light and dark fallbacks",
+  "motion": "Compose animation and spring physics",
+  "spacing": "4dp base scale",
+  "preserved": ["playback", "storage access", "review decisions", "deletion flow"]
+}
