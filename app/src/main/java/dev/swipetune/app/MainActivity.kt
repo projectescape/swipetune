@@ -45,9 +45,7 @@ class MainActivity : ComponentActivity() {
                     viewModel.loadFolder(uri)
                 }
                 LaunchedEffect(Unit) {
-                    if (ContextCompat.checkSelfPermission(this@MainActivity, audioPermission) == PackageManager.PERMISSION_GRANTED) {
-                        viewModel.scanDeviceLibrary()
-                    } else {
+                    if (ContextCompat.checkSelfPermission(this@MainActivity, audioPermission) != PackageManager.PERMISSION_GRANTED) {
                         permissionLauncher.launch(audioPermission)
                     }
                 }
@@ -59,7 +57,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         if (ContextCompat.checkSelfPermission(this, audioPermission) == PackageManager.PERMISSION_GRANTED) {
-            viewModel.startObservingDeviceLibrary()
+            viewModel.onAppForeground()
         }
     }
 

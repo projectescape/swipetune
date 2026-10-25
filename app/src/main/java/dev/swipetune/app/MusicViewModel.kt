@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -43,18 +44,23 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val controllerFuture: ListenableFuture<MediaController>
     private var player: MediaController? = null
     private var playbackQueue: List<SongRef> = emptyList()
+    private var queueBuildJob: Job? = null
+    private var queueBuildGeneration = 0
+    private var isBuildingQueue = false
     private var queueUndo: QueueSnapshot? = null
     private val loadingArtwork = mutableSetOf<String>()
     private var reviewModeActive = false
     private var normalPlayback: NormalPlaybackSnapshot? = null
     private var observingDeviceLibrary = false
     private var mediaStoreRescanJob: Job? = null
+    private var lastForegroundRefreshMs = 0L
+    private val sessionSaves = Channel<PersistedState>(Channel.CONFLATED)
     private val mediaStoreObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             mediaStoreRescanJob?.cancel()
             mediaStoreRescanJob = viewModelScope.launch {
                 delay(700)
-                scanDeviceLibrary()
+                scanDeviceLibrary(announce = false)
             }
         }
     }
@@ -72,7 +78,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 val uri = mediaItem?.mediaId?.takeIf(String::isNotBlank) ?: return
                 val song = _state.value.songs.firstOrNull { it.uri == uri } ?: return
                 showCurrentSong(song)
-                syncQueueFromPlayer()
+                if (!isBuildingQueue) syncQueueFromPlayer()
             }
 
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) {
@@ -94,6 +100,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
 
     init {
+        viewModelScope.launch(Dispatchers.IO) {
+            for (persisted in sessionSaves) store.save(persisted)
+        }
         viewModelScope.launch(Dispatchers.IO) {
             LegacyStateMigrator(database).migrate(store.load())
         }
@@ -143,10 +152,16 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun scanDeviceLibrary() {
+    fun scanDeviceLibrary(announce: Boolean = true) {
         if (_state.value.isScanning) return
         viewModelScope.launch {
-            _state.update { it.copy(isScanning = true, errorMessage = null, statusMessage = "Indexing device music…") }
+            _state.update {
+                it.copy(
+                    isScanning = true,
+                    errorMessage = null,
+                    statusMessage = if (announce) "Indexing device music…" else null,
+                )
+            }
             runCatching {
                 val songs = withContext(Dispatchers.IO) {
                     _state.value.folderUri?.let { repository.scanAndIndex(Uri.parse(it)) } ?: repository.scanDevice()
@@ -154,12 +169,29 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 mergeScannedLibrary(songs, _state.value.folderUri)
             }.onSuccess { persisted ->
                 saveAndShow(persisted)
-                _state.update { it.copy(isScanning = false, statusMessage = "Indexed ${persisted.songs.size} songs") }
+                _state.update {
+                    it.copy(
+                        isScanning = false,
+                        statusMessage = if (announce) "Indexed ${persisted.songs.size} songs" else null,
+                    )
+                }
             }.onFailure { error ->
                 _state.update {
                     it.copy(isScanning = false, statusMessage = null, errorMessage = error.message ?: "Could not index device music")
                 }
             }
+        }
+    }
+
+    fun onAppForeground() {
+        startObservingDeviceLibrary()
+        val now = System.currentTimeMillis()
+        if (_state.value.songs.isEmpty()) {
+            lastForegroundRefreshMs = now
+            scanDeviceLibrary(announce = true)
+        } else if (now - lastForegroundRefreshMs >= FOREGROUND_REFRESH_COOLDOWN_MS) {
+            lastForegroundRefreshMs = now
+            scanDeviceLibrary(announce = false)
         }
     }
 
@@ -337,6 +369,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun removeQueueItem(uri: String) {
+        cancelQueueBuild()
         val player = player ?: return
         val index = (0 until player.mediaItemCount).firstOrNull {
             player.getMediaItemAt(it).mediaId == uri
@@ -353,6 +386,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun playNext(songs: List<SongRef>) {
+        cancelQueueBuild()
         val player = player ?: return
         if (songs.isEmpty()) return
         rememberQueueForUndo(player)
@@ -362,6 +396,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun appendToQueue(songs: List<SongRef>) {
+        cancelQueueBuild()
         val player = player ?: return
         if (songs.isEmpty()) return
         rememberQueueForUndo(player)
@@ -370,6 +405,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun moveQueueItem(fromIndex: Int, toIndex: Int) {
+        cancelQueueBuild()
         val player = player ?: return
         if (fromIndex !in 0 until player.mediaItemCount || toIndex !in 0 until player.mediaItemCount || fromIndex == toIndex) return
         rememberQueueForUndo(player)
@@ -378,6 +414,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearUpcomingQueue() {
+        cancelQueueBuild()
         val player = player ?: return
         val current = player.currentMediaItemIndex
         if (current < 0 || player.mediaItemCount <= 1) return
@@ -388,6 +425,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun undoQueueEdit() {
+        cancelQueueBuild()
         val player = player ?: return
         val snapshot = queueUndo ?: return
         queueUndo = null
@@ -727,7 +765,6 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun clearMessage() = _state.update { it.copy(statusMessage = null, errorMessage = null) }
 
     private fun saveAndShow(persisted: PersistedState) {
-        store.save(persisted)
         viewModelScope.launch(Dispatchers.IO) {
             database.withTransaction {
                 database.libraryDao().clearReviewDecisions()
@@ -760,6 +797,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             selectedSongUris = playback.selectedSongUris,
             duplicateGroups = playback.duplicateGroups,
         )
+        sessionSaves.trySend(persisted)
     }
 
     private fun mergeScannedLibrary(songs: List<SongRef>, folderUri: String?): PersistedState {
@@ -767,9 +805,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val validUris = songs.mapTo(hashSetOf(), SongRef::uri)
         val decisions = old.decisions.filterKeys(validUris::contains)
         val scopedSongs = songs.filter { old.reviewFolderName == null || it.folderName == old.reviewFolderName }
+        val scopedUris = scopedSongs.mapTo(hashSetOf(), SongRef::uri)
         val reviewedPrefix = old.swipeOrder.take(old.swipeCursor).filter(validUris::contains)
         val remaining = old.swipeOrder.drop(old.swipeCursor)
-            .filter { it in validUris && it !in decisions && scopedSongs.any { song -> song.uri == it } }
+            .filter { it in validUris && it !in decisions && it in scopedUris }
         val additions = ReviewQueue.create(scopedSongs, decisions).filterNot(remaining::contains)
         return old.toPersisted().copy(
             folderUri = folderUri,
@@ -791,21 +830,71 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             _state.update { it.copy(errorMessage = "The player is still starting. Try again in a moment.") }
             return
         }
+        queueBuildJob?.cancel()
+        val generation = ++queueBuildGeneration
         playbackQueue = songs
         val startIndex = songs.indexOfFirst { it.uri == start.uri }.coerceAtLeast(0)
+        val queueUris = songs.map(SongRef::uri)
         _state.update {
             it.copy(
                 nowPlayingUri = start.uri,
                 metadata = TrackMetadata(start.title, start.artist, start.album, it.artworkByUri[start.uri]),
-                playbackQueue = songs.map(SongRef::uri),
+                positionMs = 0,
+                durationMs = start.durationMs,
+                playbackQueue = queueUris,
                 errorMessage = null,
             )
         }
-        val items = songs.map(::mediaItem)
-        player.setMediaItems(items, startIndex, 0)
+
+        val immediateAfterEnd = (startIndex + 1 + QUEUE_START_WINDOW).coerceAtMost(songs.size)
+        player.setMediaItem(mediaItem(start))
+        if (startIndex + 1 < immediateAfterEnd) {
+            player.addMediaItems(songs.subList(startIndex + 1, immediateAfterEnd).map(::mediaItem))
+        }
         player.prepare()
         player.playWhenReady = autoplay
         showCurrentSong(start)
+
+        val hasDeferredItems = startIndex > 0 || immediateAfterEnd < songs.size
+        isBuildingQueue = hasDeferredItems
+        if (!hasDeferredItems) return
+
+        queueBuildJob = viewModelScope.launch {
+            try {
+                // Let the selected row, artwork, and transport state settle before
+                // sending the rest of a very large queue across the media session.
+                delay(500)
+                var cursor = immediateAfterEnd
+                while (cursor < songs.size && generation == queueBuildGeneration) {
+                    val end = (cursor + QUEUE_CHUNK_SIZE).coerceAtMost(songs.size)
+                    val items = withContext(Dispatchers.Default) { songs.subList(cursor, end).map(::mediaItem) }
+                    player.addMediaItems(items)
+                    cursor = end
+                    delay(64)
+                }
+
+                var beforeEnd = startIndex
+                while (beforeEnd > 0 && generation == queueBuildGeneration) {
+                    val beforeStart = (beforeEnd - QUEUE_CHUNK_SIZE).coerceAtLeast(0)
+                    val items = withContext(Dispatchers.Default) { songs.subList(beforeStart, beforeEnd).map(::mediaItem) }
+                    player.addMediaItems(0, items)
+                    beforeEnd = beforeStart
+                    delay(64)
+                }
+            } finally {
+                if (generation == queueBuildGeneration) {
+                    isBuildingQueue = false
+                    _state.update { it.copy(playbackQueue = queueUris) }
+                }
+            }
+        }
+    }
+
+    private fun cancelQueueBuild() {
+        queueBuildGeneration++
+        queueBuildJob?.cancel()
+        queueBuildJob = null
+        isBuildingQueue = false
     }
 
     private fun showCurrentSong(song: SongRef) {
@@ -845,6 +934,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun clearNowPlaying() {
+        cancelQueueBuild()
         _state.update {
             it.copy(
                 nowPlayingUri = null,
@@ -859,6 +949,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        cancelQueueBuild()
         stopObservingDeviceLibrary()
         player?.removeListener(playerListener)
         MediaController.releaseFuture(controllerFuture)
@@ -915,6 +1006,10 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 }
+
+private const val QUEUE_START_WINDOW = 32
+private const val QUEUE_CHUNK_SIZE = 128
+private const val FOREGROUND_REFRESH_COOLDOWN_MS = 60_000L
 
 private fun PersistedState.toUiState() = AppUiState(
     folderUri = folderUri,

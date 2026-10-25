@@ -44,9 +44,11 @@ class PlaybackService : MediaLibraryService() {
     private var historyListenedMs: Long = 0
     private var replayGainVolume = 1f
     private val handler = Handler(Looper.getMainLooper())
+    private var persistJob: kotlinx.coroutines.Job? = null
+    private val persistPlayback = Runnable { persistPlaybackAsync() }
     private val persistPosition = object : Runnable {
         override fun run() {
-            mediaSession?.player?.let(playbackStore::save)
+            persistPlaybackAsync()
             handler.postDelayed(this, 5_000)
         }
     }
@@ -131,8 +133,8 @@ class PlaybackService : MediaLibraryService() {
                         androidx.media3.common.Player.EVENT_POSITION_DISCONTINUITY,
                     )
                 ) {
-                    playbackStore.save(player)
-                    serviceScope.launch { PlaybackWidget().updateAll(this@PlaybackService) }
+                    handler.removeCallbacks(persistPlayback)
+                    handler.postDelayed(persistPlayback, 700)
                 }
             }
         })
@@ -180,11 +182,12 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(persistPosition)
+        handler.removeCallbacks(persistPlayback)
         handler.removeCallbacks(sleepTimer)
         handler.removeCallbacks(playbackFade)
         finishHistory(completed = false)
         mediaSession?.run {
-            playbackStore.save(player)
+            playbackStore.save(playbackStore.capture(player))
             player.release()
             release()
         }
@@ -192,6 +195,15 @@ class PlaybackService : MediaLibraryService() {
         audioEffects.release()
         serviceScope.cancel()
         super.onDestroy()
+    }
+
+    private fun persistPlaybackAsync() {
+        val snapshot = mediaSession?.player?.let(playbackStore::capture) ?: return
+        persistJob?.cancel()
+        persistJob = serviceScope.launch {
+            playbackStore.save(snapshot)
+            PlaybackWidget().updateAll(this@PlaybackService)
+        }
     }
 
     private inner class LibraryCallback : MediaLibrarySession.Callback {

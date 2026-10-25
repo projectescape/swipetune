@@ -18,10 +18,19 @@ internal data class PlaybackSnapshot(
 internal class PlaybackStore(context: Context) {
     private val preferences = context.getSharedPreferences("playback", Context.MODE_PRIVATE)
 
-    fun save(player: Player) {
+    fun capture(player: Player): PlaybackSnapshot = PlaybackSnapshot(
+        items = List(player.mediaItemCount, player::getMediaItemAt),
+        currentIndex = player.currentMediaItemIndex.coerceAtLeast(0),
+        positionMs = player.currentPosition.coerceAtLeast(0),
+        shuffleEnabled = player.shuffleModeEnabled,
+        repeatMode = player.repeatMode,
+    )
+
+    fun save(player: Player) = save(capture(player))
+
+    fun save(playback: PlaybackSnapshot) {
         val items = JSONArray().apply {
-            repeat(player.mediaItemCount) { index ->
-                val item = player.getMediaItemAt(index)
+            playback.items.forEach { item ->
                 val metadata = item.mediaMetadata
                 put(
                     JSONObject()
@@ -35,10 +44,10 @@ internal class PlaybackStore(context: Context) {
         }
         val snapshot = JSONObject()
             .put("items", items)
-            .put("index", player.currentMediaItemIndex.coerceAtLeast(0))
-            .put("position", player.currentPosition.coerceAtLeast(0))
-            .put("shuffle", player.shuffleModeEnabled)
-            .put("repeat", player.repeatMode)
+            .put("index", playback.currentIndex)
+            .put("position", playback.positionMs)
+            .put("shuffle", playback.shuffleEnabled)
+            .put("repeat", playback.repeatMode)
         preferences.edit().putString("snapshot", snapshot.toString()).apply()
     }
 

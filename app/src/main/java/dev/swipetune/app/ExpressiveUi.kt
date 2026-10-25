@@ -6,15 +6,27 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode as AnimationRepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -22,6 +34,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.drag
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -47,6 +62,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -96,6 +114,8 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.LinearWavyProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -125,7 +145,11 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -136,6 +160,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.progressBarRangeInfo
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -147,6 +175,7 @@ import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
 private enum class ExpressiveScreen { LIBRARY, REVIEW, REVIEW_DECISIONS, SETTINGS }
+private enum class PlayerPane { NOW_PLAYING, LYRICS, QUEUE }
 
 private val ScreenEdge = 16.dp
 private val ListItemInset = 8.dp
@@ -189,7 +218,7 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                 }
             },
         ) { padding ->
-            if (state.isScanning) {
+            if (state.isScanning && state.songs.isEmpty()) {
                 ExpressiveLoading(Modifier.padding(padding))
             } else {
                 AnimatedContent(
@@ -233,7 +262,15 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                 }
             }
             }
-            if (showPlayer && state.nowPlayingSong != null) {
+            AnimatedVisibility(
+                visible = showPlayer && state.nowPlayingSong != null,
+                enter = fadeIn(tween(220)) +
+                    slideInVertically(tween(360)) { height -> height / 5 } +
+                    scaleIn(tween(360), initialScale = .96f),
+                exit = fadeOut(tween(170)) +
+                    slideOutVertically(tween(240)) { height -> height / 7 } +
+                    scaleOut(tween(220), targetScale = .98f),
+            ) {
                 FullPlayerOverlay(state, viewModel, onDismiss = { showPlayer = false })
             }
         }
@@ -403,6 +440,34 @@ private enum class LibraryView(val label: String) {
 
 private enum class LibrarySort(val label: String) { TITLE("Title"), ARTIST("Artist"), ALBUM("Album") }
 
+private fun librarySongsForView(
+    visibleSongs: List<SongRef>,
+    favorites: Set<String>,
+    recentHistory: List<HistorySummary>,
+    query: String,
+    sort: LibrarySort,
+    view: LibraryView,
+): List<SongRef> {
+    val source = when (view) {
+        LibraryView.FAVORITES -> visibleSongs.filter { it.uri in favorites }
+        LibraryView.HISTORY -> {
+            val byUri = visibleSongs.associateBy(SongRef::uri)
+            recentHistory.mapNotNull { event -> byUri[event.trackUri] }
+        }
+        else -> visibleSongs
+    }
+    return source.filter { song ->
+        query.isBlank() || listOf(song.title, song.artist, song.album, song.folderName)
+            .any { it.contains(query, ignoreCase = true) }
+    }.let { songs ->
+        when (sort) {
+            LibrarySort.TITLE -> songs.sortedBy { it.title.lowercase() }
+            LibrarySort.ARTIST -> songs.sortedWith(compareBy({ it.artist.lowercase() }, { it.title.lowercase() }))
+            LibrarySort.ALBUM -> songs.sortedWith(compareBy({ it.album.lowercase() }, { it.trackNumber }, { it.title.lowercase() }))
+        }
+    }
+}
+
 @Composable
 private fun ExpressiveLibrary(
     state: AppUiState,
@@ -416,6 +481,13 @@ private fun ExpressiveLibrary(
     var selectedPlaylistId by rememberSaveable { mutableStateOf<String?>(null) }
     var selectedCollection by rememberSaveable { mutableStateOf<String?>(null) }
     var showCreatePlaylist by remember { mutableStateOf(false) }
+    val visibleSongs = remember(state.songs, state.decisions) { state.visibleSongs }
+    val pagerState = rememberPagerState(initialPage = libraryView.ordinal) { LibraryView.entries.size }
+    val sectionListState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    BackHandler(enabled = selectedCollection != null || selectedPlaylistId != null) {
+        if (selectedCollection != null) selectedCollection = null else selectedPlaylistId = null
+    }
     val cycleSort = {
         sort = when (sort) {
             LibrarySort.TITLE -> LibrarySort.ARTIST
@@ -423,22 +495,13 @@ private fun ExpressiveLibrary(
             LibrarySort.ALBUM -> LibrarySort.TITLE
         }
     }
-    val filtered = remember(state.visibleSongs, query, sort, libraryView, state.favorites) {
-        val source = when (libraryView) {
-            LibraryView.FAVORITES -> state.visibleSongs.filter { it.uri in state.favorites }
-            LibraryView.HISTORY -> state.recentHistory.mapNotNull { event -> state.visibleSongs.firstOrNull { it.uri == event.trackUri } }
-            else -> state.visibleSongs
-        }
-        source.filter { song ->
-            query.isBlank() || listOf(song.title, song.artist, song.album, song.folderName)
-                .any { it.contains(query, ignoreCase = true) }
-        }.let { songs ->
-            when (sort) {
-                LibrarySort.TITLE -> songs.sortedBy { it.title.lowercase() }
-                LibrarySort.ARTIST -> songs.sortedWith(compareBy({ it.artist.lowercase() }, { it.title.lowercase() }))
-                LibrarySort.ALBUM -> songs.sortedWith(compareBy({ it.album.lowercase() }, { it.trackNumber }, { it.title.lowercase() }))
-            }
-        }
+    LaunchedEffect(pagerState.currentPage) {
+        libraryView = LibraryView.entries[pagerState.currentPage]
+        selectedCollection = null
+        selectedPlaylistId = null
+    }
+    LaunchedEffect(libraryView) {
+        sectionListState.animateScrollToItem(libraryView.ordinal)
     }
 
     Column(
@@ -453,7 +516,7 @@ private fun ExpressiveLibrary(
                         Column(Modifier.weight(1f)) {
                             Text("Your library", style = MaterialTheme.typography.headlineLarge, maxLines = 1)
                             Text(
-                                "${state.visibleSongs.size} songs · ${state.favorites.size} favorites",
+                                "${visibleSongs.size} songs · ${state.favorites.size} favorites",
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
@@ -485,7 +548,7 @@ private fun ExpressiveLibrary(
                     Column(Modifier.weight(1f)) {
                         Text("Your library", style = MaterialTheme.typography.headlineLarge)
                         Text(
-                            "${state.visibleSongs.size} songs · ${state.favorites.size} favorites",
+                            "${visibleSongs.size} songs · ${state.favorites.size} favorites",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium,
                         )
@@ -516,13 +579,19 @@ private fun ExpressiveLibrary(
         )
 
         LazyRow(
+            state = sectionListState,
             contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(LibraryView.entries) { item ->
                 val selected = libraryView == item
                 Surface(
-                    onClick = { libraryView = item },
+                    onClick = {
+                        libraryView = item
+                        selectedCollection = null
+                        selectedPlaylistId = null
+                        scope.launch { pagerState.animateScrollToPage(item.ordinal) }
+                    },
                     shape = RoundedCornerShape(18.dp),
                     color = if (selected) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .62f),
                     contentColor = if (selected) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
@@ -548,81 +617,64 @@ private fun ExpressiveLibrary(
             }
         }
 
+        val currentSongs = librarySongsForView(visibleSongs, state.favorites, state.recentHistory, query, sort, libraryView)
         val collectionGroups = when (libraryView) {
-            LibraryView.ALBUMS -> filtered.groupBy(SongRef::album)
-            LibraryView.ARTISTS -> filtered.groupBy(SongRef::artist)
-            LibraryView.GENRES -> filtered.groupBy(SongRef::genre)
-            LibraryView.FOLDERS -> filtered.groupBy(SongRef::folderName)
+            LibraryView.ALBUMS -> currentSongs.groupBy(SongRef::album)
+            LibraryView.ARTISTS -> currentSongs.groupBy(SongRef::artist)
+            LibraryView.GENRES -> currentSongs.groupBy(SongRef::genre)
+            LibraryView.FOLDERS -> currentSongs.groupBy(SongRef::folderName)
             else -> emptyMap()
         }
-        val selectedSongs = selectedCollection?.let(collectionGroups::get)
-
-        if (selectedSongs != null) {
-            CollectionDetail(
-                name = selectedCollection.orEmpty(),
-                songs = selectedSongs,
-                state = state,
-                viewModel = viewModel,
-                onBack = { selectedCollection = null },
-                modifier = Modifier.weight(1f),
-            )
-        } else if (libraryView == LibraryView.PLAYLISTS) {
-            ExpressivePlaylists(
-                state = state,
-                viewModel = viewModel,
-                selectedPlaylistId = selectedPlaylistId,
-                onSelectedPlaylist = { selectedPlaylistId = it },
-                onCreate = { showCreatePlaylist = true },
-                modifier = Modifier.weight(1f),
-            )
-        } else if (state.visibleSongs.isEmpty()) {
-            EmptyLibrary(Modifier.weight(1f))
-        } else if (filtered.isEmpty()) {
-            EmptyLibraryResult(query, libraryView, Modifier.weight(1f))
-        } else {
-            when (libraryView) {
-                LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> LazyColumn(
-                    modifier = Modifier.weight(1f),
-                    contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    items(filtered, key = SongRef::uri) { song ->
-                        ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(filtered, song) }
-                    }
+        val activeCollection = selectedCollection?.takeIf(collectionGroups::containsKey)
+        AnimatedContent(
+            targetState = activeCollection,
+            modifier = Modifier.weight(1f),
+            transitionSpec = {
+                if (targetState != null) {
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(280)) { it / 5 }) togetherWith
+                        (fadeOut(tween(130)) + slideOutHorizontally(tween(220)) { -it / 8 })
+                } else {
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(280)) { -it / 5 }) togetherWith
+                        (fadeOut(tween(130)) + slideOutHorizontally(tween(220)) { it / 8 })
                 }
-                LibraryView.ALBUMS -> LibraryCollections(
-                    groups = filtered.groupBy(SongRef::album),
+            },
+            label = "library detail",
+        ) { collectionName ->
+            val selectedSongs = collectionName?.let(collectionGroups::get)
+            if (collectionName != null && selectedSongs != null) {
+                CollectionDetail(
+                    name = collectionName,
+                    songs = selectedSongs,
                     state = state,
                     viewModel = viewModel,
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Album,
-                    onOpen = { selectedCollection = it },
+                    onBack = { selectedCollection = null },
+                    modifier = Modifier.fillMaxSize(),
                 )
-                LibraryView.ARTISTS -> LibraryCollections(
-                    groups = filtered.groupBy(SongRef::artist),
-                    state = state,
-                    viewModel = viewModel,
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Person,
-                    onOpen = { selectedCollection = it },
-                )
-                LibraryView.GENRES -> LibraryCollections(
-                    groups = filtered.groupBy(SongRef::genre),
-                    state = state,
-                    viewModel = viewModel,
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.GraphicEq,
-                    onOpen = { selectedCollection = it },
-                )
-                LibraryView.FOLDERS -> LibraryCollections(
-                    groups = filtered.groupBy(SongRef::folderName),
-                    state = state,
-                    viewModel = viewModel,
-                    modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Folder,
-                    onOpen = { selectedCollection = it },
-                )
-                LibraryView.PLAYLISTS -> Unit
+            } else {
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = selectedPlaylistId == null,
+                    beyondViewportPageCount = 1,
+                    key = { LibraryView.entries[it].name },
+                ) { page ->
+                    val pageView = LibraryView.entries[page]
+                    val pageSongs = remember(visibleSongs, state.favorites, state.recentHistory, query, sort, pageView) {
+                        librarySongsForView(visibleSongs, state.favorites, state.recentHistory, query, sort, pageView)
+                    }
+                    LibraryPage(
+                        view = pageView,
+                        songs = pageSongs,
+                        query = query,
+                        state = state,
+                        viewModel = viewModel,
+                        selectedPlaylistId = selectedPlaylistId,
+                        onSelectedPlaylist = { selectedPlaylistId = it },
+                        onCreatePlaylist = { showCreatePlaylist = true },
+                        onOpenCollection = { selectedCollection = it },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             }
         }
 
@@ -650,6 +702,102 @@ private fun ExpressiveLibrary(
             },
             dismissButton = { TextButton(onClick = { showCreatePlaylist = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun LibraryPage(
+    view: LibraryView,
+    songs: List<SongRef>,
+    query: String,
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    selectedPlaylistId: String?,
+    onSelectedPlaylist: (String?) -> Unit,
+    onCreatePlaylist: () -> Unit,
+    onOpenCollection: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    if (view == LibraryView.PLAYLISTS) {
+        AnimatedContent(
+            targetState = selectedPlaylistId,
+            modifier = modifier,
+            transitionSpec = {
+                if (targetState != null) {
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(280)) { it / 5 }) togetherWith
+                        (fadeOut(tween(130)) + slideOutHorizontally(tween(220)) { -it / 8 })
+                } else {
+                    (fadeIn(tween(180)) + slideInHorizontally(tween(280)) { -it / 5 }) togetherWith
+                        (fadeOut(tween(130)) + slideOutHorizontally(tween(220)) { it / 8 })
+                }
+            },
+            label = "playlist detail",
+        ) { playlistId ->
+            ExpressivePlaylists(
+                state = state,
+                viewModel = viewModel,
+                selectedPlaylistId = playlistId,
+                onSelectedPlaylist = onSelectedPlaylist,
+                onCreate = onCreatePlaylist,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+        return
+    }
+    if (state.visibleSongs.isEmpty()) {
+        EmptyLibrary(modifier)
+        return
+    }
+    if (songs.isEmpty()) {
+        EmptyLibraryResult(query, view, modifier)
+        return
+    }
+
+    when (view) {
+        LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> LazyColumn(
+            modifier = modifier,
+            contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            items(songs, key = SongRef::uri) { song ->
+                Box(Modifier.animateItem(fadeInSpec = tween(150), fadeOutSpec = tween(120), placementSpec = tween(190))) {
+                    ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
+                }
+            }
+        }
+        LibraryView.ALBUMS -> LibraryCollections(
+            groups = songs.groupBy(SongRef::album),
+            state = state,
+            viewModel = viewModel,
+            modifier = modifier,
+            icon = Icons.Default.Album,
+            onOpen = onOpenCollection,
+        )
+        LibraryView.ARTISTS -> LibraryCollections(
+            groups = songs.groupBy(SongRef::artist),
+            state = state,
+            viewModel = viewModel,
+            modifier = modifier,
+            icon = Icons.Default.Person,
+            onOpen = onOpenCollection,
+        )
+        LibraryView.GENRES -> LibraryCollections(
+            groups = songs.groupBy(SongRef::genre),
+            state = state,
+            viewModel = viewModel,
+            modifier = modifier,
+            icon = Icons.Default.GraphicEq,
+            onOpen = onOpenCollection,
+        )
+        LibraryView.FOLDERS -> LibraryCollections(
+            groups = songs.groupBy(SongRef::folderName),
+            state = state,
+            viewModel = viewModel,
+            modifier = modifier,
+            icon = Icons.Default.Folder,
+            onOpen = onOpenCollection,
+        )
+        LibraryView.PLAYLISTS -> Unit
     }
 }
 
@@ -819,7 +967,12 @@ private fun ExpressivePlaylists(
             ) {
                 itemsIndexed(songs, key = { _, song -> song.uri }) { index, song ->
                     Row(
-                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(ListItemInset),
+                        Modifier
+                            .animateItem(fadeInSpec = tween(150), fadeOutSpec = tween(120), placementSpec = tween(190))
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(18.dp))
+                            .clickable { viewModel.playCollection(songs, song) }
+                            .padding(ListItemInset),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(15.dp))
@@ -1033,7 +1186,9 @@ private fun CollectionDetail(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             items(songs, key = SongRef::uri) { song ->
-                ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
+                Box(Modifier.animateItem(fadeInSpec = tween(150), fadeOutSpec = tween(120), placementSpec = tween(190))) {
+                    ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
+                }
             }
         }
     }
@@ -1059,12 +1214,21 @@ private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: Music
     var showMenu by remember(song.uri) { mutableStateOf(false) }
     val playing = song.uri == state.nowPlayingUri
     val selected = song.uri in state.selectedSongUris
-    val shape = RoundedCornerShape(if (playing || selected) 22.dp else 14.dp)
-    val container = when {
+    val corner by animateDpAsState(
+        targetValue = if (playing || selected) 22.dp else 14.dp,
+        animationSpec = tween(180),
+        label = "song row shape",
+    )
+    val container by animateColorAsState(
+        targetValue = when {
         selected -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = .92f)
         playing -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = .82f)
         else -> Color.Transparent
-    }
+        },
+        animationSpec = tween(180),
+        label = "song row state",
+    )
+    val shape = RoundedCornerShape(corner)
     Row(
         Modifier
             .fillMaxWidth()
@@ -1083,12 +1247,21 @@ private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: Music
             Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyLarge, fontWeight = if (playing || selected) FontWeight.Bold else FontWeight.Normal)
             Text("${song.artist} · ${song.album}", maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyMedium)
         }
+        if (playing) {
+            PlayingBars(isPlaying = state.isPlaying)
+        }
         IconButton(onClick = { viewModel.toggleFavorite(song) }) {
-            Icon(
-                if (state.isFavorite(song)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                if (state.isFavorite(song)) "Remove from favorites" else "Add to favorites",
-                tint = if (state.isFavorite(song)) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            AnimatedContent(
+                targetState = state.isFavorite(song),
+                transitionSpec = { scaleIn(spring(stiffness = 560f), initialScale = .55f) + fadeIn() togetherWith scaleOut(tween(100)) + fadeOut() },
+                label = "favorite song",
+            ) { favorite ->
+                Icon(
+                    if (favorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                    if (favorite) "Remove from favorites" else "Add to favorites",
+                    tint = if (favorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
         Box {
             IconButton(onClick = { showMenu = true }) {
@@ -1160,25 +1333,39 @@ private fun CompactGlassPlayer(state: AppUiState, viewModel: MusicViewModel, onO
         Column(Modifier.clickable(onClick = onOpenPlayer).padding(horizontal = 12.dp, vertical = 10.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 ExpressiveArtwork(state, Modifier.size(58.dp), RoundedCornerShape(18.dp))
-                Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
-                    Text(
+                AnimatedContent(
+                    targetState = Triple(
+                        state.nowPlayingUri,
                         state.metadata?.title ?: "Loading…",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Text(
                         state.metadata?.artist.orEmpty(),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    ),
+                    modifier = Modifier.weight(1f).padding(horizontal = 12.dp),
+                    transitionSpec = {
+                        (fadeIn(tween(220)) + slideInVertically(tween(300)) { it / 3 }) togetherWith
+                            (fadeOut(tween(130)) + slideOutVertically(tween(220)) { -it / 4 })
+                    },
+                    label = "mini player track",
+                ) { (_, title, artist) ->
+                    Column {
+                        Text(
+                            title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            artist,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 IconButton(onClick = viewModel::previousVisibleSong) { Icon(Icons.Default.SkipPrevious, "Previous song") }
                 MorphingPlayButton(state.isPlaying, viewModel::togglePlayPause, Modifier.size(54.dp))
                 IconButton(onClick = viewModel::nextVisibleSong) { Icon(Icons.Default.SkipNext, "Next song") }
             }
-            ExpressiveSeekBar(state, viewModel, showTime = false)
+            ExpressiveSeekBar(state, viewModel, showTime = false, compact = true)
         }
     }
 }
@@ -1385,19 +1572,76 @@ private fun ExpressiveArtwork(state: AppUiState, modifier: Modifier, shape: Roun
         modifier.clip(shape).background(MaterialTheme.colorScheme.surfaceContainerLow),
         contentAlignment = Alignment.Center,
     ) {
-        if (art != null) {
-            Image(
-                art.asImageBitmap(),
-                contentDescription = "Album artwork",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
-        } else {
-            Icon(
-                Icons.Default.GraphicEq,
-                contentDescription = null,
-                modifier = Modifier.size(72.dp),
-                tint = MaterialTheme.colorScheme.primary.copy(alpha = .68f),
+        AnimatedContent(
+            targetState = state.nowPlayingUri to art,
+            transitionSpec = {
+                (fadeIn(tween(300)) + scaleIn(tween(380), initialScale = .96f)) togetherWith
+                    (fadeOut(tween(170)) + scaleOut(tween(240), targetScale = 1.025f))
+            },
+            label = "album artwork change",
+        ) { (_, artwork) ->
+            if (artwork != null) {
+                Image(
+                    artwork.asImageBitmap(),
+                    contentDescription = "Album artwork",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            } else {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.GraphicEq,
+                        contentDescription = null,
+                        modifier = Modifier.size(72.dp),
+                        tint = MaterialTheme.colorScheme.primary.copy(alpha = .68f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlayingBars(isPlaying: Boolean) {
+    val color = MaterialTheme.colorScheme.primary
+    if (!isPlaying) {
+        Icon(Icons.Default.GraphicEq, "Current song paused", Modifier.size(24.dp), tint = color)
+        return
+    }
+    val motion = rememberInfiniteTransition(label = "playing bars")
+    val first by motion.animateFloat(
+        initialValue = .35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(520, easing = LinearEasing), AnimationRepeatMode.Reverse),
+        label = "playing bar one",
+    )
+    val second by motion.animateFloat(
+        initialValue = 1f,
+        targetValue = .25f,
+        animationSpec = infiniteRepeatable(tween(430, easing = LinearEasing), AnimationRepeatMode.Reverse),
+        label = "playing bar two",
+    )
+    val third by motion.animateFloat(
+        initialValue = .5f,
+        targetValue = .9f,
+        animationSpec = infiniteRepeatable(tween(610, easing = LinearEasing), AnimationRepeatMode.Reverse),
+        label = "playing bar three",
+    )
+    Row(
+        Modifier.size(width = 24.dp, height = 26.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        listOf(first, second, third).forEach { level ->
+            Box(
+                Modifier
+                    .width(4.dp)
+                    .height(22.dp)
+                    .graphicsLayer {
+                        scaleY = .32f + (.68f * level)
+                        transformOrigin = TransformOrigin(.5f, 1f)
+                    }
+                    .background(color, RoundedCornerShape(4.dp)),
             )
         }
     }
@@ -1489,31 +1733,111 @@ private fun DecisionButton(
     ) { Box(contentAlignment = Alignment.Center) { icon() } }
 }
 
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-private fun ExpressiveSeekBar(state: AppUiState, viewModel: MusicViewModel, showTime: Boolean) {
+private fun ExpressiveSeekBar(
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    showTime: Boolean,
+    compact: Boolean = false,
+) {
     var dragging by remember { mutableStateOf(false) }
-    val max = state.durationMs.coerceAtLeast(1).toFloat()
-    val currentPosition = state.positionMs.coerceAtMost(state.durationMs).toFloat()
-    val sliderState = remember(max) { SliderState(currentPosition, 0, 0f..max) }
+    var scrubPosition by remember { mutableStateOf(0f) }
+    var hapticStep by remember { mutableStateOf(-1) }
+    val haptics = LocalHapticFeedback.current
+    val density = LocalDensity.current
+    val duration = state.durationMs.coerceAtLeast(1).toFloat()
+    val currentPosition = state.positionMs.coerceIn(0, state.durationMs.coerceAtLeast(0)).toFloat()
+    val smoothPosition by animateFloatAsState(
+        targetValue = currentPosition,
+        animationSpec = tween(if (state.isPlaying) 520 else 160, easing = LinearEasing),
+        label = "smooth playback position",
+    )
+    val displayedPosition = if (dragging) scrubPosition else smoothPosition
+    val amplitude by animateFloatAsState(
+        targetValue = if (state.isPlaying && !dragging) 1f else 0f,
+        animationSpec = tween(260),
+        label = "seek wave life",
+    )
+    val thumbWidth by animateDpAsState(
+        targetValue = if (dragging) 6.dp else if (compact) 10.dp else 14.dp,
+        animationSpec = spring(stiffness = 520f, dampingRatio = .72f),
+        label = "seek thumb width",
+    )
+    val thumbHeight by animateDpAsState(
+        targetValue = if (dragging) 26.dp else if (compact) 10.dp else 14.dp,
+        animationSpec = spring(stiffness = 520f, dampingRatio = .72f),
+        label = "seek thumb height",
+    )
+    val primary = MaterialTheme.colorScheme.primary
+    val inactive = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    LaunchedEffect(currentPosition, max, dragging) {
-        if (!dragging) sliderState.value = currentPosition
+    LaunchedEffect(state.nowPlayingUri, currentPosition, dragging) {
+        if (!dragging) scrubPosition = currentPosition
     }
 
+    val seekModifier = Modifier
+        .fillMaxWidth()
+        .height(if (compact) 34.dp else 48.dp)
+        .semantics {
+            progressBarRangeInfo = ProgressBarRangeInfo(displayedPosition, 0f..duration)
+            setProgress { target ->
+                val value = target.coerceIn(0f, duration)
+                scrubPosition = value
+                viewModel.seekTo(value.toLong())
+                true
+            }
+        }
+        .pointerInput(duration) {
+            awaitEachGesture {
+                val down = awaitFirstDown(requireUnconsumed = false)
+                dragging = true
+                scrubPosition = (down.position.x / size.width.toFloat()).coerceIn(0f, 1f) * duration
+                hapticStep = ((scrubPosition / duration) * 20).toInt()
+                down.consume()
+                drag(down.id) { change ->
+                    scrubPosition = (change.position.x / size.width.toFloat()).coerceIn(0f, 1f) * duration
+                    val nextStep = ((scrubPosition / duration) * 20).toInt()
+                    if (nextStep != hapticStep) {
+                        haptics.performHapticFeedback(HapticFeedbackType.SegmentFrequentTick)
+                        hapticStep = nextStep
+                    }
+                    change.consume()
+                }
+                viewModel.seekTo(scrubPosition.toLong())
+                dragging = false
+            }
+        }
+
     Column {
-        Slider(
-            state = sliderState,
-            onValueChange = { dragging = true },
-            onValueChangeFinished = { viewModel.seekTo(sliderState.value.toLong()); dragging = false },
-            colors = SliderDefaults.colors(
-                activeTrackColor = MaterialTheme.colorScheme.primary,
-                thumbColor = MaterialTheme.colorScheme.primary,
-                inactiveTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-            ),
-        )
+        BoxWithConstraints(seekModifier, contentAlignment = Alignment.CenterStart) {
+            val thumbFraction = (displayedPosition / duration).coerceIn(0f, 1f)
+            val thumbTravelPx = with(density) { (maxWidth - 14.dp).toPx() }
+            LinearWavyProgressIndicator(
+                progress = { thumbFraction },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 7.dp),
+                color = primary,
+                trackColor = inactive,
+                stroke = Stroke(width = with(density) { (if (compact) 3.dp else 4.dp).toPx() }, cap = StrokeCap.Round),
+                trackStroke = Stroke(width = with(density) { (if (compact) 3.dp else 4.dp).toPx() }, cap = StrokeCap.Round),
+                gapSize = 7.dp,
+                wavelength = if (compact) 24.dp else 28.dp,
+                amplitude = { amplitude },
+                waveSpeed = if (state.isPlaying && !dragging) 14.dp else 0.dp,
+            )
+            Box(
+                Modifier
+                    .padding(start = 7.dp)
+                    .graphicsLayer {
+                        translationX = thumbTravelPx * thumbFraction - thumbWidth.toPx() / 2f
+                    }
+                    .size(width = thumbWidth, height = thumbHeight)
+                    .background(primary, RoundedCornerShape(if (dragging) 4.dp else 50.dp)),
+            )
+        }
         if (showTime) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(formatExpressiveTime(sliderState.value.toLong()), style = MaterialTheme.typography.labelSmall)
+                Text(formatExpressiveTime(displayedPosition.toLong()), style = MaterialTheme.typography.labelSmall)
                 Text(formatExpressiveTime(state.durationMs), style = MaterialTheme.typography.labelSmall)
             }
         }
@@ -1558,7 +1882,6 @@ private fun ExpressiveReviewComplete(state: AppUiState, viewModel: MusicViewMode
 private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewModel, onBack: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
     var showAccepted by rememberSaveable { mutableStateOf(false) }
-    val songs = if (showAccepted) state.acceptedSongs else state.rejectedSongs
     BackHandler(onBack = onBack)
     Column(
         Modifier
@@ -1603,16 +1926,26 @@ private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewMod
             }
         }
 
+        AnimatedContent(
+            targetState = showAccepted,
+            modifier = Modifier.weight(1f),
+            transitionSpec = {
+                (fadeIn(tween(180)) + slideInHorizontally(tween(260)) { if (targetState) it / 6 else -it / 6 }) togetherWith
+                    (fadeOut(tween(120)) + slideOutHorizontally(tween(200)) { if (targetState) -it / 8 else it / 8 })
+            },
+            label = "review decision filter",
+        ) { accepted ->
+            val songs = if (accepted) state.acceptedSongs else state.rejectedSongs
         if (songs.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Icon(if (showAccepted) Icons.Default.Check else Icons.Default.Restore, null, Modifier.size(50.dp), tint = MaterialTheme.colorScheme.primary)
+                Icon(if (accepted) Icons.Default.Check else Icons.Default.Restore, null, Modifier.size(50.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(14.dp))
-                Text(if (showAccepted) "Nothing accepted yet" else "Nothing rejected", style = MaterialTheme.typography.headlineSmall)
-                Text(if (showAccepted) "Songs kept in Review will appear here." else "Songs rejected in Review will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (accepted) "Nothing accepted yet" else "Nothing rejected", style = MaterialTheme.typography.headlineSmall)
+                Text(if (accepted) "Songs kept in Review will appear here." else "Songs rejected in Review will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             LazyColumn(
@@ -1634,11 +1967,12 @@ private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewMod
                             overflow = TextOverflow.Ellipsis,
                         )
                         IconButton(onClick = { viewModel.clearReviewDecision(song) }) {
-                            Icon(Icons.Default.Restore, if (showAccepted) "Clear accepted decision" else "Restore to library")
+                            Icon(Icons.Default.Restore, if (accepted) "Clear accepted decision" else "Restore to library")
                         }
                     }
                 }
             }
+        }
         }
     }
 
@@ -1726,8 +2060,25 @@ private fun FullPlayerOverlay(
                     }
                 }
 
-                if (showQueue) {
-                    val queue = state.playbackQueue.mapNotNull { uri -> state.songs.firstOrNull { it.uri == uri } }
+                AnimatedContent(
+                    targetState = when {
+                        showQueue -> PlayerPane.QUEUE
+                        showLyrics -> PlayerPane.LYRICS
+                        else -> PlayerPane.NOW_PLAYING
+                    },
+                    modifier = Modifier.weight(1f),
+                    transitionSpec = {
+                        (fadeIn(tween(180)) + slideInHorizontally(tween(280)) { it / 7 }) togetherWith
+                            (fadeOut(tween(130)) + slideOutHorizontally(tween(220)) { -it / 9 })
+                    },
+                    label = "player pane",
+                ) { pane ->
+                    Column(Modifier.fillMaxSize()) {
+                if (pane == PlayerPane.QUEUE) {
+                    val queue = remember(state.playbackQueue, state.songs) {
+                        val songsByUri = state.songs.associateBy(SongRef::uri)
+                        state.playbackQueue.mapNotNull(songsByUri::get)
+                    }
                     if (queue.isEmpty()) {
                         Column(
                             Modifier.fillMaxSize(),
@@ -1756,6 +2107,7 @@ private fun FullPlayerOverlay(
                                 val active = song.uri == state.nowPlayingUri
                                 Row(
                                     Modifier
+                                        .animateItem(fadeInSpec = tween(140), fadeOutSpec = tween(120), placementSpec = tween(180))
                                         .fillMaxWidth()
                                         .clip(RoundedCornerShape(if (active) 24.dp else 16.dp))
                                         .background(
@@ -1788,7 +2140,7 @@ private fun FullPlayerOverlay(
                             }
                         }
                     }
-                } else if (showLyrics) {
+                } else if (pane == PlayerPane.LYRICS) {
                     if (state.lyrics.isEmpty()) {
                         Column(
                             Modifier.weight(1f).fillMaxWidth().padding(28.dp),
@@ -1903,6 +2255,8 @@ private fun FullPlayerOverlay(
                                 tint = if (state.repeatMode == RepeatMode.OFF) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.primary,
                             )
                         }
+                    }
+                }
                     }
                 }
             }
