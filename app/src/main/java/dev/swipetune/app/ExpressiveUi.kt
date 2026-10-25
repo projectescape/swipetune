@@ -178,20 +178,6 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbar) },
-            topBar = {
-                if (screen == ExpressiveScreen.LIBRARY || screen == ExpressiveScreen.SETTINGS) {
-                    ExpressiveHeader(
-                        showingSettings = screen == ExpressiveScreen.SETTINGS,
-                        onSettings = {
-                            screen = if (screen == ExpressiveScreen.SETTINGS) {
-                                ExpressiveScreen.LIBRARY
-                            } else {
-                                ExpressiveScreen.SETTINGS
-                            }
-                        },
-                    )
-                }
-            },
             bottomBar = {
                 Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))) {
                     AnimatedVisibility(state.nowPlayingUri != null && screen != ExpressiveScreen.REVIEW) {
@@ -219,7 +205,12 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                     label = "screen",
                 ) { destination ->
                     when (destination) {
-                        ExpressiveScreen.LIBRARY -> ExpressiveLibrary(state, viewModel, onOpenPlayer = { showPlayer = true })
+                        ExpressiveScreen.LIBRARY -> ExpressiveLibrary(
+                            state,
+                            viewModel,
+                            onOpenPlayer = { showPlayer = true },
+                            onOpenSettings = { screen = ExpressiveScreen.SETTINGS },
+                        )
                         ExpressiveScreen.REVIEW -> ExpressiveReview(
                             state,
                             viewModel,
@@ -231,6 +222,7 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                             state,
                             viewModel,
                             onChooseFolder,
+                            onBack = { screen = ExpressiveScreen.LIBRARY },
                             onStartReview = { scope -> viewModel.prepareReview(scope); screen = ExpressiveScreen.REVIEW },
                             onOpenReviewDecisions = { screen = ExpressiveScreen.REVIEW_DECISIONS },
                         )
@@ -296,25 +288,6 @@ private fun FrostedSurface(
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = .38f)),
         content = content,
     )
-}
-
-@Composable
-private fun ExpressiveHeader(showingSettings: Boolean, onSettings: () -> Unit) {
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
-            .padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Spacer(Modifier.weight(1f))
-        IconButton(onClick = onSettings) {
-            Icon(
-                imageVector = if (showingSettings) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Settings,
-                contentDescription = if (showingSettings) "Back to library" else "Settings",
-            )
-        }
-    }
 }
 
 @Composable
@@ -407,6 +380,7 @@ private fun ExpressiveLibrary(
     state: AppUiState,
     viewModel: MusicViewModel,
     onOpenPlayer: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
     var libraryView by rememberSaveable { mutableStateOf(LibraryView.SONGS) }
     var query by rememberSaveable { mutableStateOf("") }
@@ -432,7 +406,11 @@ private fun ExpressiveLibrary(
         }
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 22.dp, end = 16.dp, top = 18.dp, bottom = 12.dp),
             verticalAlignment = Alignment.Bottom,
@@ -460,6 +438,9 @@ private fun ExpressiveLibrary(
                 modifier = Modifier.size(56.dp),
                 shape = RoundedCornerShape(20.dp),
             ) { Icon(Icons.Default.Shuffle, "Play a random song") }
+            IconButton(onClick = onOpenSettings, modifier = Modifier.size(52.dp)) {
+                Icon(Icons.Default.Settings, "Settings")
+            }
         }
 
         OutlinedTextField(
@@ -1891,9 +1872,11 @@ private fun ExpressiveSettings(
     state: AppUiState,
     viewModel: MusicViewModel,
     onChooseFolder: () -> Unit,
+    onBack: () -> Unit,
     onStartReview: (String?) -> Unit,
     onOpenReviewDecisions: () -> Unit,
 ) {
+    BackHandler(onBack = onBack)
     var reviewScope by rememberSaveable { mutableStateOf<String?>(state.reviewFolderName) }
     val reviewFolders = remember(state.songs) { state.songs.map(SongRef::folderName).distinct().sorted() }
     val reviewCandidates = state.songs.count { song ->
@@ -1906,12 +1889,17 @@ private fun ExpressiveSettings(
         uri?.let(viewModel::importBackup)
     }
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 18.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
         item {
-            Text("Settings", style = MaterialTheme.typography.headlineLarge)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to library") }
+                Text("Settings", style = MaterialTheme.typography.headlineLarge)
+            }
             Text(
                 "Make SwipeTune feel at home on this phone.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
