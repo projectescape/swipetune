@@ -8,20 +8,23 @@ A locked design system for the Android app. UI work reads this file before imple
 
 - Genre: playful-atmospheric.
 - Audience: people listening to and curating a local Android music collection.
-- Primary job: play music reliably; review songs quickly when the user enters Review mode.
+- Primary job: play the complete device library reliably. Review is an optional curation tool entered deliberately from Settings.
 - Voice: warm, concise, lightly mischievous. Never cute at the cost of clarity.
 
 ## App structure
 
 The app uses a listening-workbench structure:
 
-- Library is the default destination and organizes Songs, Albums, Artists, Folders, and Favorites.
-- Review is a purpose-built swipe flow with its own playback queue and undo history.
-- Settings owns appearance, library location and maintenance, playback preferences, and app information.
-- A persistent mini-player floats above navigation whenever a track is loaded.
+- Library is the default destination and automatically indexes device audio through MediaStore; user-picked folders are optional additional roots.
+- Library is the only primary surface. Settings is a top-right action, with no bottom navigation. Review is not a peer destination or part of the brand promise.
+- Settings owns appearance, library sources and maintenance, playback preferences, Review launch/scope/history, and app information.
+- Review is a purpose-built, explicitly launched flow with its own playback queue and undo history. It can target all unreviewed music or one indexed folder.
+- A persistent mini-player floats above the system navigation inset whenever a track is loaded.
 - Tapping the mini-player opens one immersive full player shared by every destination.
 
-Search, sort, queue, and collection detail views are contextual layers rather than permanent top-level tabs. Rejected review items never appear in the normal library unless restored.
+Search, sort, queue, collection details, Review, and review-decision management are contextual layers rather than permanent top-level tabs. Accepted and rejected decisions persist across app and Review restarts. Rejected tracks never appear in the normal library unless their decision is cleared; accepted tracks remain available normally.
+
+Accepted and Rejected also appear as built-in smart playlists. They update directly from Review metadata and cannot be renamed or deleted. Rejected is the sole deliberate library exception where hidden tracks can be inspected, played, or restored.
 
 ## Visual hierarchy
 
@@ -43,7 +46,7 @@ The app must remain legible when artwork is missing, nearly black, or extremely 
 
 ## Surfaces and frost
 
-- Frost is reserved for the floating mini-player, bottom navigation, queue sheet, and transient overlays.
+- Frost is reserved for the floating mini-player, queue sheet, and transient overlays.
 - Library rows and settings use quiet tonal surfaces, not nested glass cards.
 - Frost combines a translucent semantic surface, a subtle outline, and backdrop color sampling where the platform allows it. Blur is never required for contrast.
 - Shape language is rounded and slightly asymmetric: 28–36 dp hero surfaces, 18–24 dp rows/sheets, pills only for compact filters and state selectors.
@@ -87,7 +90,7 @@ The reference build was exercised on the same Pixel 9 API 36 emulator with real 
 - subtle active-track motion and immediate touch-down response;
 - drag reordering where neighboring rows smoothly make room.
 
-SwipeTune should match that perceived responsiveness while retaining its own frosted, artwork-led Material 3 Expressive identity and its distinct Review mode.
+SwipeTune should match that perceived responsiveness while retaining its own frosted, artwork-led Material 3 Expressive identity. Review remains a powerful secondary tool rather than defining the main player.
 
 ## Controls and states
 
@@ -100,7 +103,7 @@ SwipeTune should match that perceived responsiveness while retaining its own fro
 ## Responsive behavior
 
 - Verify compact widths equivalent to 320, 375, and 414 dp and an expanded 768 dp layout.
-- Compact layouts use bottom navigation; expanded layouts may use a navigation rail and two-pane library/player composition.
+- Compact layouts keep Settings in the top app bar; expanded layouts may use a two-pane library/player composition without introducing a one-item navigation rail.
 - No horizontal scrolling except intentional filter/tab rails.
 - Full-player artwork is constrained by available height so controls never fall below system insets.
 

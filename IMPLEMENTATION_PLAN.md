@@ -1,5 +1,19 @@
 # SwipeTune 0.4 complete-player plan
 
+## Product hierarchy correction — 2026-10-25
+
+1. Default startup indexes the complete Android media library after the standard audio permission; it never blocks on a folder picker.
+2. SAF folder selection becomes an optional source under Settings, useful for storage that MediaStore does not expose.
+3. Library is the only primary surface. Settings is a top-right action with no bottom navigation; Review is launched from a dedicated Settings panel and may target all music or one indexed folder.
+4. Review decisions are global durable metadata. Rejected tracks remain hidden from every normal library collection; accepted tracks remain visible.
+5. Closing Review preserves its order, cursor, decision history, and scope. Reopening continues with the next unreviewed track. Changing scope creates a queue only from still-unreviewed tracks and never clears earlier decisions.
+6. Settings exposes accepted and rejected result lists with a clear-decision action for each track.
+7. Global chrome carries only the SwipeTune name. “Listen freely. Keep deliberately.” is removed from the main surface and may remain as quiet About copy.
+8. SwipeTune becomes a public GPLv3 project. The GPLv3 FFmpeg extension can then be distributed with corresponding source and notices.
+9. Remove the one-item bottom navigation and expose Settings from the library's top-right action.
+10. Add non-deletable Accepted and Rejected smart playlists derived from durable Review decisions.
+11. Follow PixelPlayer's reliable indexing pattern: observe MediaStore while foregrounded, debounce changes, rescan automatically, and respect safe drawing insets around notches and display cutouts.
+
 ## Reference study evidence
 
 - Installed official PixelPlayer 0.7.5-beta arm64 build on the Pixel 9 API 36 emulator and verified its APK against the release SHA-256.
@@ -141,7 +155,7 @@ Acceptance: no option is cosmetic-only or broken; 320/375/414/768 dp, font scali
 ## Execution status — 0.4.0 development build
 
 - Implemented: Room schema and one-time JSON import; SAF + permission-aware MediaStore indexing; album/artist/genre/folder/favorite/history/playlist browsing; service-owned queue actions and persistence; queue reorder/undo/save; MediaLibraryService browse tree and search; home-screen widget; local synchronized lyrics import; sleep timer; audio-session equalizer/bass/loudness; ReplayGain attenuation; gapless/offload preferences; ordered/custom-cover/duplicate/merge/Quick Fill playlists; M3U import/export; multi-select batch queue/favorite/reject actions; duplicate preview; play-event history; Android + explicit ZIP backup; System/Light/Dark/dynamic appearance; compact rows and motion/artwork controls.
-- Emulator verified: launch and upgrade preservation, media-session metadata/queue registration, play/pause/seek/next, mini→full player transition, queue sheet, coherent light/dark/system switching, and persisted Room play events. The optional Jellyfin FFmpeg extension was runtime-tested, then excluded from the shippable build because its published artifact is GPLv3 and SwipeTune has not adopted that license. Motion evidence was captured for both PixelPlayer and SwipeTune.
+- Emulator verified: launch and upgrade preservation, media-session metadata/queue registration, play/pause/seek/next, mini→full player transition, queue sheet, coherent light/dark/system switching, and persisted Room play events. SwipeTune now adopts GPLv3, so the Jellyfin FFmpeg extension is restored and disclosed. Motion evidence was captured for both PixelPlayer and SwipeTune.
 - Honest limits in this build: transition duration is an end fade, not overlapping crossfade; lyrics are local/imported rather than network-fetched; equalizer uses device presets rather than a custom per-band editor; additional FFmpeg codecs await an explicit GPL-compatible licensing decision or a separately built compatible alternative; duplicate ranking uses format/duration rather than acoustic fingerprinting; metadata edits and destructive batch file deletion are not exposed; Stats dashboards, smart-rule playlists, expanded widget sizes, and a car-host Android Auto run remain follow-up work. The JSON compatibility layer still drives the main Compose library while Room becomes authoritative incrementally.
 
 ---

@@ -27,6 +27,7 @@ class SessionStore(context: Context) {
             swipeOrder = root.optJSONArray("swipeOrder").toStringList(),
             swipeCursor = root.optInt("swipeCursor", 0),
             history = history,
+            reviewFolderName = root.optString("reviewFolderName").takeIf(String::isNotBlank),
             favorites = root.optJSONArray("favorites").toStringList().toSet(),
             playlists = root.optJSONArray("playlists").toPlaylists(),
             themeMode = runCatching { ThemeMode.valueOf(root.optString("themeMode", ThemeMode.SYSTEM.name)) }
@@ -66,6 +67,7 @@ class SessionStore(context: Context) {
                     put(JSONObject().put("uri", entry.uri).put("decision", entry.decision.name))
                 }
             })
+            put("reviewFolderName", state.reviewFolderName ?: "")
             put("favorites", JSONArray(state.favorites.toList()))
             put("playlists", JSONArray().apply {
                 state.playlists.forEach { playlist ->

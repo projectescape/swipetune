@@ -2,10 +2,15 @@ package dev.swipetune.app
 
 import android.app.Application
 import android.content.ComponentName
+import android.database.ContentObserver
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.room.withTransaction
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
@@ -20,6 +25,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -41,6 +47,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val loadingArtwork = mutableSetOf<String>()
     private var reviewModeActive = false
     private var normalPlayback: NormalPlaybackSnapshot? = null
+    private var observingDeviceLibrary = false
+    private var mediaStoreRescanJob: Job? = null
+    private val mediaStoreObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
+        override fun onChange(selfChange: Boolean, uri: Uri?) {
+            mediaStoreRescanJob?.cancel()
+            mediaStoreRescanJob = viewModelScope.launch {
+                delay(700)
+                scanDeviceLibrary()
+            }
+        }
+    }
 
     private val playerListener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -109,32 +126,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     fun loadFolder(uri: Uri) {
         viewModelScope.launch {
-            _state.update { it.copy(isScanning = true, errorMessage = null, statusMessage = "Scanning folder…") }
+            _state.update { it.copy(isScanning = true, errorMessage = null, statusMessage = "Adding folder…") }
             runCatching {
                 val songs = withContext(Dispatchers.IO) { repository.scanAndIndex(uri) }
-                val old = _state.value
-                val validUris = songs.mapTo(hashSetOf(), SongRef::uri)
-                val decisions = old.decisions.filterKeys(validUris::contains)
-                val order = ReviewQueue.create(songs, decisions)
-                PersistedState(
-                    folderUri = uri.toString(),
-                    songs = songs,
-                    decisions = decisions,
-                    swipeOrder = order,
-                    favorites = old.favorites.intersect(validUris),
-                    playlists = old.playlists.map { playlist ->
-                        playlist.copy(songUris = playlist.songUris.filter(validUris::contains))
-                    },
-                    themeMode = old.themeMode,
-                    dynamicColor = old.dynamicColor,
-                    artworkAtmosphere = old.artworkAtmosphere,
-                    expressiveMotion = old.expressiveMotion,
-                    compactLibraryRows = old.compactLibraryRows,
-                )
+                mergeScannedLibrary(songs, uri.toString())
             }.onSuccess { persisted ->
                 saveAndShow(persisted)
                 _state.update {
-                    it.copy(isScanning = false, statusMessage = "Found ${persisted.songs.size} songs")
+                    it.copy(isScanning = false, statusMessage = "Library updated · ${persisted.songs.size} songs")
                 }
             }.onFailure { error ->
                 _state.update {
@@ -142,6 +141,83 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    fun scanDeviceLibrary() {
+        if (_state.value.isScanning) return
+        viewModelScope.launch {
+            _state.update { it.copy(isScanning = true, errorMessage = null, statusMessage = "Indexing device music…") }
+            runCatching {
+                val songs = withContext(Dispatchers.IO) {
+                    _state.value.folderUri?.let { repository.scanAndIndex(Uri.parse(it)) } ?: repository.scanDevice()
+                }
+                mergeScannedLibrary(songs, _state.value.folderUri)
+            }.onSuccess { persisted ->
+                saveAndShow(persisted)
+                _state.update { it.copy(isScanning = false, statusMessage = "Indexed ${persisted.songs.size} songs") }
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(isScanning = false, statusMessage = null, errorMessage = error.message ?: "Could not index device music")
+                }
+            }
+        }
+    }
+
+    fun startObservingDeviceLibrary() {
+        if (observingDeviceLibrary) return
+        val resolver = getApplication<Application>().contentResolver
+        resolver.registerContentObserver(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL), true, mediaStoreObserver)
+        resolver.registerContentObserver(MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL), true, mediaStoreObserver)
+        observingDeviceLibrary = true
+    }
+
+    fun stopObservingDeviceLibrary() {
+        if (!observingDeviceLibrary) return
+        mediaStoreRescanJob?.cancel()
+        getApplication<Application>().contentResolver.unregisterContentObserver(mediaStoreObserver)
+        observingDeviceLibrary = false
+    }
+
+    fun onAudioPermissionDenied() {
+        _state.update {
+            it.copy(errorMessage = "Music access is off. Grant audio permission in Android settings, or add a folder from SwipeTune settings.")
+        }
+    }
+
+    fun prepareReview(folderName: String?) {
+        val current = _state.value.toPersisted()
+        val candidates = current.songs.filter { folderName == null || it.folderName == folderName }
+        val sameScope = current.reviewFolderName == folderName
+        if (sameScope) {
+            val validOrder = current.swipeOrder.filter { uri -> candidates.any { it.uri == uri } }
+            val additions = ReviewQueue.create(candidates, current.decisions).filterNot(validOrder::contains)
+            saveAndShow(current.copy(swipeOrder = validOrder + additions, swipeCursor = current.swipeCursor.coerceAtMost(validOrder.size)))
+        } else {
+            saveAndShow(
+                current.copy(
+                    reviewFolderName = folderName,
+                    swipeOrder = ReviewQueue.create(candidates, current.decisions),
+                    swipeCursor = 0,
+                    history = emptyList(),
+                ),
+            )
+        }
+    }
+
+    fun clearReviewDecision(song: SongRef) {
+        val current = _state.value.toPersisted()
+        val nextDecisions = current.decisions - song.uri
+        val belongsToScope = current.reviewFolderName == null || song.folderName == current.reviewFolderName
+        val reviewed = current.swipeOrder.take(current.swipeCursor).filterNot { it == song.uri }
+        val pending = current.swipeOrder.drop(current.swipeCursor).filterNot { it == song.uri }
+        saveAndShow(
+            current.copy(
+                decisions = nextDecisions,
+                swipeOrder = reviewed + pending + if (belongsToScope) listOf(song.uri) else emptyList(),
+                swipeCursor = reviewed.size,
+                history = current.history.filterNot { it.uri == song.uri },
+            ),
+        )
     }
 
     fun play(song: SongRef, autoplay: Boolean = true) {
@@ -190,19 +266,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val player = player ?: return
         val snapshot = normalPlayback
         normalPlayback = null
-        if (snapshot == null || snapshot.items.isEmpty()) {
+        val visibleUris = _state.value.visibleSongs.mapTo(hashSetOf(), SongRef::uri)
+        val restoredItems = snapshot?.items.orEmpty().filter { it.mediaId in visibleUris }
+        if (snapshot == null || restoredItems.isEmpty()) {
             player.stop()
             player.clearMediaItems()
             clearNowPlaying()
             return
         }
-        player.setMediaItems(snapshot.items, snapshot.index.coerceIn(snapshot.items.indices), snapshot.positionMs)
+        val previousUri = snapshot.items.getOrNull(snapshot.index)?.mediaId
+        val restoredIndex = restoredItems.indexOfFirst { it.mediaId == previousUri }.takeIf { it >= 0 } ?: 0
+        val restoredPosition = snapshot.positionMs.takeIf { restoredItems[restoredIndex].mediaId == previousUri } ?: 0L
+        player.setMediaItems(restoredItems, restoredIndex, restoredPosition)
         player.shuffleModeEnabled = snapshot.shuffle
         player.repeatMode = snapshot.repeatMode
         player.prepare()
         player.playWhenReady = snapshot.playWhenReady
         syncQueueFromPlayer()
-        snapshot.items.getOrNull(snapshot.index)?.mediaId?.let { uri ->
+        restoredItems.getOrNull(restoredIndex)?.mediaId?.let { uri ->
             _state.value.songs.firstOrNull { it.uri == uri }?.let(::showCurrentSong)
         }
     }
@@ -395,6 +476,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deletePlaylist(id: String) {
+        if (id == ACCEPTED_PLAYLIST_ID || id == REJECTED_PLAYLIST_ID) return
         val current = _state.value.toPersisted()
         saveAndShow(current.copy(playlists = current.playlists.filterNot { it.id == id }))
     }
@@ -569,7 +651,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun rescanLibrary() {
-        _state.value.folderUri?.let { loadFolder(Uri.parse(it)) }
+        scanDeviceLibrary()
     }
 
     fun decide(decision: ReviewDecision) {
@@ -646,6 +728,17 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun saveAndShow(persisted: PersistedState) {
         store.save(persisted)
+        viewModelScope.launch(Dispatchers.IO) {
+            database.withTransaction {
+                database.libraryDao().clearReviewDecisions()
+                if (persisted.decisions.isNotEmpty()) {
+                    val now = System.currentTimeMillis()
+                    database.libraryDao().putReviewDecisions(
+                        persisted.decisions.map { (uri, decision) -> ReviewDecisionEntity(uri, decision.name, now) },
+                    )
+                }
+            }
+        }
         val playback = _state.value
         _state.value = persisted.toUiState().copy(
             nowPlayingUri = playback.nowPlayingUri,
@@ -666,6 +759,29 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             lyrics = playback.lyrics,
             selectedSongUris = playback.selectedSongUris,
             duplicateGroups = playback.duplicateGroups,
+        )
+    }
+
+    private fun mergeScannedLibrary(songs: List<SongRef>, folderUri: String?): PersistedState {
+        val old = _state.value
+        val validUris = songs.mapTo(hashSetOf(), SongRef::uri)
+        val decisions = old.decisions.filterKeys(validUris::contains)
+        val scopedSongs = songs.filter { old.reviewFolderName == null || it.folderName == old.reviewFolderName }
+        val reviewedPrefix = old.swipeOrder.take(old.swipeCursor).filter(validUris::contains)
+        val remaining = old.swipeOrder.drop(old.swipeCursor)
+            .filter { it in validUris && it !in decisions && scopedSongs.any { song -> song.uri == it } }
+        val additions = ReviewQueue.create(scopedSongs, decisions).filterNot(remaining::contains)
+        return old.toPersisted().copy(
+            folderUri = folderUri,
+            songs = songs,
+            decisions = decisions,
+            swipeOrder = reviewedPrefix + remaining + additions,
+            swipeCursor = reviewedPrefix.size.coerceAtMost(reviewedPrefix.size + remaining.size + additions.size),
+            history = old.history.filter { it.uri in validUris },
+            favorites = old.favorites.intersect(validUris),
+            playlists = old.playlists.map { playlist ->
+                playlist.copy(songUris = playlist.songUris.filter(validUris::contains))
+            },
         )
     }
 
@@ -743,6 +859,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        stopObservingDeviceLibrary()
         player?.removeListener(playerListener)
         MediaController.releaseFuture(controllerFuture)
         player = null
@@ -806,6 +923,7 @@ private fun PersistedState.toUiState() = AppUiState(
     swipeOrder = swipeOrder,
     swipeCursor = swipeCursor.coerceIn(0, swipeOrder.size),
     history = history,
+    reviewFolderName = reviewFolderName,
     favorites = favorites,
     playlists = playlists,
     themeMode = themeMode,
@@ -822,6 +940,7 @@ private fun AppUiState.toPersisted() = PersistedState(
     swipeOrder = swipeOrder,
     swipeCursor = swipeCursor,
     history = history,
+    reviewFolderName = reviewFolderName,
     favorites = favorites,
     playlists = playlists,
     themeMode = themeMode,

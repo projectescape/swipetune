@@ -160,55 +160,55 @@ data class HistorySummary(val trackUri: String, val lastPlayedMs: Long, val play
 
 @Dao
 interface LibraryDao {
-    @Query("SELECT * FROM tracks WHERE missing = 0 ORDER BY titleSort, uri")
+    @Query("SELECT * FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY titleSort, uri")
     fun observeTracks(): Flow<List<TrackEntity>>
 
-    @Query("SELECT * FROM tracks WHERE missing = 0 ORDER BY titleSort, uri")
+    @Query("SELECT * FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY titleSort, uri")
     suspend fun tracks(): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE uri = :uri LIMIT 1")
+    @Query("SELECT * FROM tracks WHERE uri = :uri AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') LIMIT 1")
     suspend fun track(uri: String): TrackEntity?
 
-    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey AND missing = 0 ORDER BY discNumber, trackNumber, titleSort")
+    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY discNumber, trackNumber, titleSort")
     fun observeAlbumTracks(albumKey: String): Flow<List<TrackEntity>>
 
-    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey AND missing = 0 ORDER BY discNumber, trackNumber, titleSort")
+    @Query("SELECT * FROM tracks WHERE albumKey = :albumKey AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY discNumber, trackNumber, titleSort")
     suspend fun albumTracks(albumKey: String): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE artistDisplay = :artist AND missing = 0 ORDER BY albumTitle COLLATE NOCASE, discNumber, trackNumber, titleSort")
+    @Query("SELECT * FROM tracks WHERE artistDisplay = :artist AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY albumTitle COLLATE NOCASE, discNumber, trackNumber, titleSort")
     suspend fun artistTracks(artist: String): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE genreDisplay = :genre AND missing = 0 ORDER BY artistDisplay COLLATE NOCASE, albumTitle COLLATE NOCASE, trackNumber")
+    @Query("SELECT * FROM tracks WHERE genreDisplay = :genre AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY artistDisplay COLLATE NOCASE, albumTitle COLLATE NOCASE, trackNumber")
     suspend fun genreTracks(genre: String): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE folderPath = :folderPath AND missing = 0 ORDER BY titleSort")
+    @Query("SELECT * FROM tracks WHERE folderPath = :folderPath AND missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') ORDER BY titleSort")
     suspend fun folderTracks(folderPath: String): List<TrackEntity>
 
-    @Query("SELECT * FROM tracks WHERE missing = 0 AND (title LIKE '%' || :query || '%' OR artistDisplay LIKE '%' || :query || '%' OR albumTitle LIKE '%' || :query || '%') ORDER BY titleSort LIMIT :limit")
+    @Query("SELECT * FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') AND (title LIKE '%' || :query || '%' OR artistDisplay LIKE '%' || :query || '%' OR albumTitle LIKE '%' || :query || '%') ORDER BY titleSort LIMIT :limit")
     suspend fun searchTracks(query: String, limit: Int = 200): List<TrackEntity>
 
-    @Query("SELECT albumKey, albumTitle AS title, artistDisplay AS artist, COUNT(*) AS trackCount, SUM(durationMs) AS durationMs FROM tracks WHERE missing = 0 GROUP BY albumKey ORDER BY title COLLATE NOCASE")
+    @Query("SELECT albumKey, albumTitle AS title, artistDisplay AS artist, COUNT(*) AS trackCount, SUM(durationMs) AS durationMs FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY albumKey ORDER BY title COLLATE NOCASE")
     fun observeAlbums(): Flow<List<AlbumSummary>>
 
-    @Query("SELECT albumKey, albumTitle AS title, artistDisplay AS artist, COUNT(*) AS trackCount, SUM(durationMs) AS durationMs FROM tracks WHERE missing = 0 GROUP BY albumKey ORDER BY title COLLATE NOCASE")
+    @Query("SELECT albumKey, albumTitle AS title, artistDisplay AS artist, COUNT(*) AS trackCount, SUM(durationMs) AS durationMs FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY albumKey ORDER BY title COLLATE NOCASE")
     suspend fun albumsOnce(): List<AlbumSummary>
 
-    @Query("SELECT artistDisplay AS artist, COUNT(*) AS trackCount, COUNT(DISTINCT albumKey) AS albumCount FROM tracks WHERE missing = 0 GROUP BY artistDisplay ORDER BY artist COLLATE NOCASE")
+    @Query("SELECT artistDisplay AS artist, COUNT(*) AS trackCount, COUNT(DISTINCT albumKey) AS albumCount FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY artistDisplay ORDER BY artist COLLATE NOCASE")
     fun observeArtists(): Flow<List<ArtistSummary>>
 
-    @Query("SELECT artistDisplay AS artist, COUNT(*) AS trackCount, COUNT(DISTINCT albumKey) AS albumCount FROM tracks WHERE missing = 0 GROUP BY artistDisplay ORDER BY artist COLLATE NOCASE")
+    @Query("SELECT artistDisplay AS artist, COUNT(*) AS trackCount, COUNT(DISTINCT albumKey) AS albumCount FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY artistDisplay ORDER BY artist COLLATE NOCASE")
     suspend fun artistsOnce(): List<ArtistSummary>
 
-    @Query("SELECT genreDisplay AS genre, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND genreDisplay != '' GROUP BY genreDisplay ORDER BY genre COLLATE NOCASE")
+    @Query("SELECT genreDisplay AS genre, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND genreDisplay != '' AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY genreDisplay ORDER BY genre COLLATE NOCASE")
     fun observeGenres(): Flow<List<GenreSummary>>
 
-    @Query("SELECT genreDisplay AS genre, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND genreDisplay != '' GROUP BY genreDisplay ORDER BY genre COLLATE NOCASE")
+    @Query("SELECT genreDisplay AS genre, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND genreDisplay != '' AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY genreDisplay ORDER BY genre COLLATE NOCASE")
     suspend fun genresOnce(): List<GenreSummary>
 
-    @Query("SELECT folderPath, folderName, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 GROUP BY folderPath, folderName ORDER BY folderPath COLLATE NOCASE")
+    @Query("SELECT folderPath, folderName, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY folderPath, folderName ORDER BY folderPath COLLATE NOCASE")
     fun observeFolders(): Flow<List<FolderSummary>>
 
-    @Query("SELECT folderPath, folderName, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 GROUP BY folderPath, folderName ORDER BY folderPath COLLATE NOCASE")
+    @Query("SELECT folderPath, folderName, COUNT(*) AS trackCount FROM tracks WHERE missing = 0 AND uri NOT IN (SELECT trackUri FROM review_decisions WHERE decision = 'REJECTED') GROUP BY folderPath, folderName ORDER BY folderPath COLLATE NOCASE")
     suspend fun foldersOnce(): List<FolderSummary>
 
     @Upsert suspend fun upsertTracks(items: List<TrackEntity>)
@@ -230,6 +230,7 @@ interface LibraryDao {
 
     @Upsert suspend fun putFavorites(items: List<FavoriteEntity>)
     @Upsert suspend fun putReviewDecisions(items: List<ReviewDecisionEntity>)
+    @Query("DELETE FROM review_decisions") suspend fun clearReviewDecisions()
     @Upsert suspend fun putPlaylists(items: List<PlaylistEntity>)
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun putPlaylistItems(items: List<PlaylistItemEntity>)
     @Insert suspend fun addPlayEvent(event: PlayEventEntity): Long

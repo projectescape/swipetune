@@ -39,6 +39,9 @@ data class UserPlaylist(
     val coverUri: String? = null,
 )
 
+const val ACCEPTED_PLAYLIST_ID = "swipetune:review:accepted"
+const val REJECTED_PLAYLIST_ID = "swipetune:review:rejected"
+
 data class PersistedState(
     val folderUri: String? = null,
     val songs: List<SongRef> = emptyList(),
@@ -46,6 +49,7 @@ data class PersistedState(
     val swipeOrder: List<String> = emptyList(),
     val swipeCursor: Int = 0,
     val history: List<ReviewEntry> = emptyList(),
+    val reviewFolderName: String? = null,
     val favorites: Set<String> = emptySet(),
     val playlists: List<UserPlaylist> = emptyList(),
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
@@ -62,6 +66,7 @@ data class AppUiState(
     val swipeOrder: List<String> = emptyList(),
     val swipeCursor: Int = 0,
     val history: List<ReviewEntry> = emptyList(),
+    val reviewFolderName: String? = null,
     val isScanning: Boolean = false,
     val isDeleting: Boolean = false,
     val statusMessage: String? = null,
@@ -93,6 +98,9 @@ data class AppUiState(
 
     val rejectedSongs: List<SongRef>
         get() = songs.filter { decisions[it.uri] == ReviewDecision.REJECTED }
+
+    val acceptedSongs: List<SongRef>
+        get() = songs.filter { decisions[it.uri] == ReviewDecision.KEPT }
 
     val currentSwipeSong: SongRef?
         get() = swipeOrder.getOrNull(swipeCursor)?.let { uri -> songs.firstOrNull { it.uri == uri } }

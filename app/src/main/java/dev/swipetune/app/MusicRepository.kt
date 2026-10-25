@@ -39,7 +39,15 @@ class MusicRepository(private val context: Context) {
         val safSongs = scan(treeUri)
         indexer.replaceSafRoot(treeUri.toString(), treeUri.lastPathSegment ?: "Music", safSongs, started)
         val mediaStoreSongs = indexer.indexMediaStoreIfPermitted()
-        return (safSongs + mediaStoreSongs).distinctBy(SongRef::uri).sortedBy { it.title.lowercase() }
+        return deduplicateSources(safSongs + mediaStoreSongs).sortedBy { it.title.lowercase() }
+    }
+
+    suspend fun scanDevice(): List<SongRef> = indexer.indexMediaStoreIfPermitted()
+
+    private fun deduplicateSources(songs: List<SongRef>): List<SongRef> = songs.distinctBy { song ->
+        listOf(song.title, song.artist, song.album)
+            .joinToString("|") { it.trim().lowercase().replace(Regex("[^a-z0-9]+"), " ") } +
+            "|${song.durationMs / 1_000}"
     }
 
     fun metadata(song: SongRef): TrackMetadata {

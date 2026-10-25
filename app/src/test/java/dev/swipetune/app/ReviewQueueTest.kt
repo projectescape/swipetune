@@ -30,4 +30,29 @@ class ReviewQueueTest {
         assertFalse(undone.decisions.containsKey(songs.first().uri))
         assertEquals(0, undone.history.size)
     }
+
+    @Test
+    fun reopeningOnlyQueuesSongsWithoutPersistentDecisions() {
+        val decisions = mapOf(
+            songs[0].uri to ReviewDecision.KEPT,
+            songs[1].uri to ReviewDecision.REJECTED,
+        )
+
+        assertEquals(emptyList<String>(), ReviewQueue.create(songs, decisions))
+    }
+
+    @Test
+    fun reviewDecisionsDriveBuiltInPlaylistsAndHideRejectedGlobally() {
+        val state = AppUiState(
+            songs = songs,
+            decisions = mapOf(
+                songs[0].uri to ReviewDecision.KEPT,
+                songs[1].uri to ReviewDecision.REJECTED,
+            ),
+        )
+
+        assertEquals(listOf(songs[0]), state.acceptedSongs)
+        assertEquals(listOf(songs[1]), state.rejectedSongs)
+        assertEquals(listOf(songs[0]), state.visibleSongs)
+    }
 }

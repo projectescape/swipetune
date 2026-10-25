@@ -31,14 +31,18 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -142,7 +146,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
 
-private enum class ExpressiveScreen { LIBRARY, REVIEW, REJECTED, SETTINGS }
+private enum class ExpressiveScreen { LIBRARY, REVIEW, REVIEW_DECISIONS, SETTINGS }
 
 @Composable
 internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: () -> Unit) {
@@ -159,16 +163,11 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
     }
 
     LaunchedEffect(screen) {
-        if (screen == ExpressiveScreen.REVIEW || screen == ExpressiveScreen.REJECTED) {
+        if (screen == ExpressiveScreen.REVIEW) {
             viewModel.enterReviewMode()
         } else {
             viewModel.exitReviewMode()
         }
-    }
-
-    if (state.folderUri == null && !state.isScanning) {
-        ExpressiveOnboarding(onChooseFolder)
-        return
     }
 
     CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
@@ -179,16 +178,25 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
             containerColor = Color.Transparent,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             snackbarHost = { SnackbarHost(snackbar) },
-            topBar = { ExpressiveHeader(onChooseFolder) },
+            topBar = {
+                if (screen == ExpressiveScreen.LIBRARY || screen == ExpressiveScreen.SETTINGS) {
+                    ExpressiveHeader(
+                        showingSettings = screen == ExpressiveScreen.SETTINGS,
+                        onSettings = {
+                            screen = if (screen == ExpressiveScreen.SETTINGS) {
+                                ExpressiveScreen.LIBRARY
+                            } else {
+                                ExpressiveScreen.SETTINGS
+                            }
+                        },
+                    )
+                }
+            },
             bottomBar = {
-                Column {
+                Column(Modifier.windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))) {
                     AnimatedVisibility(state.nowPlayingUri != null && screen != ExpressiveScreen.REVIEW) {
                         CompactGlassPlayer(state, viewModel, onOpenPlayer = { showPlayer = true })
                     }
-                    FloatingNavigation(
-                        screen = screen,
-                        onScreen = { screen = it },
-                    )
                 }
             },
         ) { padding ->
@@ -197,7 +205,9 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
             } else {
                 AnimatedContent(
                     targetState = screen,
-                    modifier = Modifier.padding(padding),
+                    modifier = Modifier
+                        .padding(padding)
+                        .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)),
                     transitionSpec = {
                         if (state.expressiveMotion) {
                             (fadeIn(tween(260)) + scaleIn(tween(320), initialScale = .985f)) togetherWith
@@ -210,9 +220,20 @@ internal fun ExpressiveSwipeTuneApp(viewModel: MusicViewModel, onChooseFolder: (
                 ) { destination ->
                     when (destination) {
                         ExpressiveScreen.LIBRARY -> ExpressiveLibrary(state, viewModel, onOpenPlayer = { showPlayer = true })
-                        ExpressiveScreen.REVIEW -> ExpressiveReview(state, viewModel, onOpenRejected = { screen = ExpressiveScreen.REJECTED })
-                        ExpressiveScreen.REJECTED -> ExpressiveRejected(state, viewModel, onBack = { screen = ExpressiveScreen.REVIEW })
-                        ExpressiveScreen.SETTINGS -> ExpressiveSettings(state, viewModel, onChooseFolder)
+                        ExpressiveScreen.REVIEW -> ExpressiveReview(
+                            state,
+                            viewModel,
+                            onClose = { screen = ExpressiveScreen.SETTINGS },
+                            onOpenDecisions = { screen = ExpressiveScreen.REVIEW_DECISIONS },
+                        )
+                        ExpressiveScreen.REVIEW_DECISIONS -> ExpressiveReviewDecisions(state, viewModel, onBack = { screen = ExpressiveScreen.SETTINGS })
+                        ExpressiveScreen.SETTINGS -> ExpressiveSettings(
+                            state,
+                            viewModel,
+                            onChooseFolder,
+                            onStartReview = { scope -> viewModel.prepareReview(scope); screen = ExpressiveScreen.REVIEW },
+                            onOpenReviewDecisions = { screen = ExpressiveScreen.REVIEW_DECISIONS },
+                        )
                     }
                 }
             }
@@ -278,99 +299,21 @@ private fun FrostedSurface(
 }
 
 @Composable
-private fun ExpressiveHeader(onChooseFolder: () -> Unit) {
+private fun ExpressiveHeader(showingSettings: Boolean, onSettings: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
-            .statusBarsPadding()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
             .padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                "SwipeTune",
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Text(
-                "Listen freely. Keep deliberately.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+        Text("SwipeTune", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        IconButton(onClick = onSettings) {
+            Icon(
+                imageVector = if (showingSettings) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Settings,
+                contentDescription = if (showingSettings) "Back to library" else "Settings",
             )
         }
-        FrostedSurface(shape = RoundedCornerShape(20.dp)) {
-            IconButton(onClick = onChooseFolder, modifier = Modifier.size(52.dp)) {
-                Icon(Icons.Default.FolderOpen, contentDescription = "Choose music folder")
-            }
-        }
-    }
-}
-
-@Composable
-private fun FloatingNavigation(
-    screen: ExpressiveScreen,
-    onScreen: (ExpressiveScreen) -> Unit,
-) {
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .navigationBarsPadding()
-            .padding(horizontal = 10.dp, vertical = 8.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        FrostedSurface(shape = RoundedCornerShape(34.dp)) {
-            Row(
-                Modifier.padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                NavigationDestination(
-                    selected = screen == ExpressiveScreen.LIBRARY,
-                    icon = { Icon(Icons.Default.LibraryMusic, null) },
-                    label = "Library",
-                    onClick = { onScreen(ExpressiveScreen.LIBRARY) },
-                )
-                NavigationDestination(
-                    selected = screen == ExpressiveScreen.REVIEW,
-                    icon = { Icon(Icons.Default.Style, null) },
-                    label = "Review",
-                    onClick = { onScreen(ExpressiveScreen.REVIEW) },
-                )
-                NavigationDestination(
-                    selected = screen == ExpressiveScreen.SETTINGS,
-                    icon = { Icon(Icons.Default.Settings, null) },
-                    label = "Settings",
-                    onClick = { onScreen(ExpressiveScreen.SETTINGS) },
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun NavigationDestination(
-    selected: Boolean,
-    icon: @Composable () -> Unit,
-    label: String,
-    onClick: () -> Unit,
-) {
-    val background = if (selected) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent
-    Column(
-        Modifier
-            .width(70.dp)
-            .height(60.dp)
-            .clip(RoundedCornerShape(22.dp))
-            .background(background)
-            .clickable(role = Role.Tab, onClick = onClick)
-            .padding(horizontal = 4.dp, vertical = 6.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        icon()
-        Text(
-            label,
-            modifier = Modifier.padding(top = 2.dp),
-            style = MaterialTheme.typography.labelSmall,
-            maxLines = 1,
-        )
     }
 }
 
@@ -685,14 +628,19 @@ private fun ExpressivePlaylists(
         val id = selectedPlaylistId
         if (uri != null && id != null) viewModel.setPlaylistCover(id, uri)
     }
+    val smartSelection = when (selectedPlaylistId) {
+        ACCEPTED_PLAYLIST_ID -> "Accepted" to state.acceptedSongs
+        REJECTED_PLAYLIST_ID -> "Rejected" to state.rejectedSongs
+        else -> null
+    }
     val selected = state.playlists.firstOrNull { it.id == selectedPlaylistId }
-    if (selected == null) {
+    if (selected == null && smartSelection == null) {
         Column(modifier) {
             Row(
                 Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text("Your playlists", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+                Text("Playlists", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
                 Button(onClick = onCreate, shape = RoundedCornerShape(18.dp)) {
                     Icon(Icons.Default.Add, null)
                     Spacer(Modifier.width(6.dp))
@@ -702,26 +650,39 @@ private fun ExpressivePlaylists(
                     Icon(Icons.Default.Add, "Import M3U playlist")
                 }
             }
-            if (state.playlists.isEmpty()) {
-                Column(
-                    Modifier.fillMaxSize().padding(32.dp),
-                    verticalArrangement = Arrangement.Center,
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
-                    Spacer(Modifier.height(14.dp))
-                    Text("Build your first playlist", style = MaterialTheme.typography.headlineSmall)
-                    Text("Create one here, then add songs from their menu.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Button(onClick = onCreate, modifier = Modifier.padding(top = 18.dp), shape = RoundedCornerShape(18.dp)) {
-                        Icon(Icons.Default.Add, null)
-                        Spacer(Modifier.width(8.dp))
-                        Text("Create playlist")
-                    }
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                item {
+                    SmartPlaylistRow(
+                        name = "Accepted",
+                        supportingText = "Kept in Review · always available",
+                        songs = state.acceptedSongs,
+                        state = state,
+                        viewModel = viewModel,
+                        onOpen = { onSelectedPlaylist(ACCEPTED_PLAYLIST_ID) },
+                    )
                 }
-            } else {
-                LazyColumn(
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
+                item {
+                    SmartPlaylistRow(
+                        name = "Rejected",
+                        supportingText = "Hidden from the rest of your library",
+                        songs = state.rejectedSongs,
+                        state = state,
+                        viewModel = viewModel,
+                        onOpen = { onSelectedPlaylist(REJECTED_PLAYLIST_ID) },
+                    )
+                }
+                if (state.playlists.isNotEmpty()) {
+                    item {
+                        Text(
+                            "Your playlists",
+                            modifier = Modifier.padding(start = 8.dp, top = 14.dp, bottom = 4.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     items(state.playlists, key = UserPlaylist::id) { playlist ->
                         val songs = playlist.songUris.mapNotNull { uri ->
                             state.visibleSongs.firstOrNull { it.uri == uri }
@@ -759,6 +720,20 @@ private fun ExpressivePlaylists(
         return
     }
 
+    if (smartSelection != null) {
+        SmartPlaylistDetail(
+            name = smartSelection.first,
+            songs = smartSelection.second,
+            rejected = selectedPlaylistId == REJECTED_PLAYLIST_ID,
+            state = state,
+            viewModel = viewModel,
+            onBack = { onSelectedPlaylist(null) },
+            modifier = modifier,
+        )
+        return
+    }
+
+    checkNotNull(selected)
     var confirmDelete by remember(selected.id) { mutableStateOf(false) }
     val songs = selected.songUris.mapNotNull { uri -> state.visibleSongs.firstOrNull { it.uri == uri } }
     Column(modifier) {
@@ -831,6 +806,100 @@ private fun ExpressivePlaylists(
             },
             dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
         )
+    }
+}
+
+@Composable
+private fun SmartPlaylistRow(
+    name: String,
+    supportingText: String,
+    songs: List<SongRef>,
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    onOpen: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth().clip(RoundedCornerShape(22.dp)).clickable(onClick = onOpen).padding(10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        val first = songs.firstOrNull()
+        if (first != null) {
+            LibraryArtwork(first, state, viewModel, Modifier.size(62.dp), RoundedCornerShape(18.dp), Icons.AutoMirrored.Filled.QueueMusic)
+        } else {
+            Surface(Modifier.size(62.dp), RoundedCornerShape(18.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                Box(contentAlignment = Alignment.Center) { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) }
+            }
+        }
+        Column(Modifier.weight(1f).padding(horizontal = 14.dp)) {
+            Text(name, style = MaterialTheme.typography.titleMedium)
+            Text("${songs.size} songs · $supportingText", color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+        }
+        IconButton(onClick = { if (songs.isNotEmpty()) viewModel.playCollection(songs) }, enabled = songs.isNotEmpty()) {
+            Icon(Icons.Default.PlayArrow, "Play $name")
+        }
+    }
+}
+
+@Composable
+private fun SmartPlaylistDetail(
+    name: String,
+    songs: List<SongRef>,
+    rejected: Boolean,
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    onBack: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to playlists") }
+            Column(Modifier.weight(1f)) {
+                Text(name, style = MaterialTheme.typography.titleLarge)
+                Text(
+                    if (rejected) "${songs.size} songs · hidden elsewhere" else "${songs.size} songs · kept in Review",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            FilledIconButton(onClick = { if (songs.isNotEmpty()) viewModel.playCollection(songs) }, enabled = songs.isNotEmpty()) {
+                Icon(Icons.Default.PlayArrow, "Play $name")
+            }
+        }
+        Text(
+            "Built in · updates automatically · cannot be deleted",
+            modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (songs.isEmpty()) {
+            Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center) {
+                Text("Nothing here yet", style = MaterialTheme.typography.headlineSmall)
+                Text("Songs appear here as you make Review decisions.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else {
+            LazyColumn(
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                items(songs, key = SongRef::uri) { song ->
+                    Row(
+                        Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).clickable { viewModel.playCollection(songs, song) }.padding(10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        LibraryArtwork(song, state, viewModel, Modifier.size(52.dp), RoundedCornerShape(15.dp))
+                        Column(Modifier.weight(1f).padding(horizontal = 12.dp)) {
+                            Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        TextButton(onClick = { viewModel.clearReviewDecision(song) }) {
+                            Text(if (rejected) "Restore" else "Unmark")
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -937,7 +1006,7 @@ private fun EmptyLibrary(modifier: Modifier = Modifier) {
         Icon(Icons.Default.LibraryMusic, null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(14.dp))
         Text("No playable songs found", style = MaterialTheme.typography.headlineSmall)
-        Text("Choose a folder that contains audio files.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("Allow Android music access, then rescan—or add another storage folder from Settings.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -1075,22 +1144,30 @@ private fun CompactGlassPlayer(state: AppUiState, viewModel: MusicViewModel, onO
 private fun ExpressiveReview(
     state: AppUiState,
     viewModel: MusicViewModel,
-    onOpenRejected: () -> Unit,
+    onClose: () -> Unit,
+    onOpenDecisions: () -> Unit,
 ) {
+    BackHandler(onBack = onClose)
     LaunchedEffect(state.currentSwipeSong?.uri) {
         val current = state.currentSwipeSong
         if (current != null && current.uri != state.nowPlayingUri) viewModel.playReviewSong(current)
     }
 
     Column(
-        Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp),
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+            .padding(horizontal = 16.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "Close Review")
+            }
             Column(Modifier.weight(1f)) {
                 Text("Decide by listening", style = MaterialTheme.typography.headlineMedium)
                 Text(
-                    "${state.swipeCursor} of ${state.swipeOrder.size} reviewed · ${state.rejectedSongs.size} rejected",
+                    "${state.swipeCursor} of ${state.swipeOrder.size} · ${state.reviewFolderName ?: "All music"}",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
@@ -1098,8 +1175,8 @@ private fun ExpressiveReview(
                 IconButton(onClick = viewModel::undo, enabled = state.history.isNotEmpty(), modifier = Modifier.size(48.dp)) {
                     Icon(Icons.AutoMirrored.Filled.Undo, "Undo last decision")
                 }
-                TextButton(onClick = onOpenRejected, enabled = state.rejectedSongs.isNotEmpty()) {
-                    Text("${state.rejectedSongs.size} rejected")
+                TextButton(onClick = onOpenDecisions, enabled = state.decisions.isNotEmpty()) {
+                    Text("Results")
                 }
             }
         }
@@ -1426,7 +1503,7 @@ private fun ExpressiveReviewComplete(state: AppUiState, viewModel: MusicViewMode
             Spacer(Modifier.width(8.dp))
             Text("Undo last decision")
         }
-        TextButton(onClick = viewModel::restartReview) {
+        TextButton(onClick = { viewModel.prepareReview(state.reviewFolderName) }) {
             Icon(Icons.Default.Refresh, null)
             Spacer(Modifier.width(8.dp))
             Text("Review undecided songs")
@@ -1435,53 +1512,74 @@ private fun ExpressiveReviewComplete(state: AppUiState, viewModel: MusicViewMode
 }
 
 @Composable
-private fun ExpressiveRejected(state: AppUiState, viewModel: MusicViewModel, onBack: () -> Unit) {
+private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewModel, onBack: () -> Unit) {
     var confirmDelete by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize()) {
+    var showAccepted by rememberSaveable { mutableStateOf(false) }
+    val songs = if (showAccepted) state.acceptedSongs else state.rejectedSongs
+    BackHandler(onBack = onBack)
+    Column(
+        Modifier
+            .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top)),
+    ) {
         Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 18.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to Review") }
-                Text("Rejected songs", style = MaterialTheme.typography.headlineLarge)
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "Back to Settings") }
+                Text("Review decisions", style = MaterialTheme.typography.headlineLarge)
             }
             Text(
-                "These stay out of your library until you restore or permanently delete them.",
+                "Accepted songs stay in your library. Rejected songs remain hidden until you clear their decision.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium,
             )
-            Button(
-                onClick = { confirmDelete = true },
-                enabled = state.rejectedSongs.isNotEmpty() && !state.isDeleting,
-                modifier = Modifier.padding(top = 14.dp).height(50.dp),
-                shape = RoundedCornerShape(18.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                ),
-            ) {
-                if (state.isDeleting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                else Icon(Icons.Default.DeleteOutline, null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (state.isDeleting) "Deleting…" else "Delete rejected files")
+            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = !showAccepted,
+                    onClick = { showAccepted = false },
+                    label = { Text("Rejected ${state.rejectedSongs.size}") },
+                )
+                FilterChip(
+                    selected = showAccepted,
+                    onClick = { showAccepted = true },
+                    label = { Text("Accepted ${state.acceptedSongs.size}") },
+                )
+            }
+            if (!showAccepted) {
+                Button(
+                    onClick = { confirmDelete = true },
+                    enabled = state.rejectedSongs.isNotEmpty() && !state.isDeleting,
+                    modifier = Modifier.padding(top = 10.dp).height(50.dp),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+                ) {
+                    if (state.isDeleting) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    else Icon(Icons.Default.DeleteOutline, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (state.isDeleting) "Deleting…" else "Delete rejected files")
+                }
             }
         }
 
-        if (state.rejectedSongs.isEmpty()) {
+        if (songs.isEmpty()) {
             Column(
                 Modifier.fillMaxSize().padding(32.dp),
                 horizontalAlignment = Alignment.Start,
                 verticalArrangement = Arrangement.Center,
             ) {
-                Icon(Icons.Default.Restore, null, Modifier.size(50.dp), tint = MaterialTheme.colorScheme.primary)
+                Icon(if (showAccepted) Icons.Default.Check else Icons.Default.Restore, null, Modifier.size(50.dp), tint = MaterialTheme.colorScheme.primary)
                 Spacer(Modifier.height(14.dp))
-                Text("Nothing is rejected", style = MaterialTheme.typography.headlineSmall)
-                Text("Songs you swipe left will wait here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(if (showAccepted) "Nothing accepted yet" else "Nothing rejected", style = MaterialTheme.typography.headlineSmall)
+                Text(if (showAccepted) "Songs kept in Review will appear here." else "Songs rejected in Review will appear here.", color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                items(state.rejectedSongs, key = SongRef::uri) { song ->
+                items(songs, key = SongRef::uri) { song ->
                     Row(
                         Modifier.fillMaxWidth().clip(RoundedCornerShape(18.dp)).background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = .56f)).padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1495,7 +1593,9 @@ private fun ExpressiveRejected(state: AppUiState, viewModel: MusicViewModel, onB
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        IconButton(onClick = { viewModel.restore(song) }) { Icon(Icons.Default.Restore, "Restore to library") }
+                        IconButton(onClick = { viewModel.clearReviewDecision(song) }) {
+                            Icon(Icons.Default.Restore, if (showAccepted) "Clear accepted decision" else "Restore to library")
+                        }
                     }
                 }
             }
@@ -1551,8 +1651,7 @@ private fun FullPlayerOverlay(
             Column(
                 Modifier
                     .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
                     .padding(horizontal = 20.dp, vertical = 10.dp),
             ) {
                 Row(
@@ -1792,7 +1891,14 @@ private fun ExpressiveSettings(
     state: AppUiState,
     viewModel: MusicViewModel,
     onChooseFolder: () -> Unit,
+    onStartReview: (String?) -> Unit,
+    onOpenReviewDecisions: () -> Unit,
 ) {
+    var reviewScope by rememberSaveable { mutableStateOf<String?>(state.reviewFolderName) }
+    val reviewFolders = remember(state.songs) { state.songs.map(SongRef::folderName).distinct().sorted() }
+    val reviewCandidates = state.songs.count { song ->
+        song.uri !in state.decisions && (reviewScope == null || song.folderName == reviewScope)
+    }
     val exportBackup = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { uri ->
         uri?.let(viewModel::exportBackup)
     }
@@ -1876,7 +1982,7 @@ private fun ExpressiveSettings(
                     OutlinedButton(onClick = onChooseFolder, modifier = Modifier.weight(1f), shape = RoundedCornerShape(18.dp)) {
                         Icon(Icons.Default.FolderOpen, null)
                         Spacer(Modifier.width(8.dp))
-                        Text("Folder")
+                        Text("Add folder")
                     }
                 }
                 OutlinedButton(
@@ -1893,6 +1999,58 @@ private fun ExpressiveSettings(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
+            }
+        }
+        item {
+            SettingsPanel("Review your music") {
+                Text(
+                    "Optional listening cleanup. Rejected songs stay hidden throughout SwipeTune; accepted songs remain in your library.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text("Choose what to review", modifier = Modifier.padding(top = 14.dp), style = MaterialTheme.typography.titleMedium)
+                LazyRow(
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    item {
+                        FilterChip(
+                            selected = reviewScope == null,
+                            onClick = { reviewScope = null },
+                            label = { Text("All music") },
+                        )
+                    }
+                    items(reviewFolders) { folder ->
+                        FilterChip(
+                            selected = reviewScope == folder,
+                            onClick = { reviewScope = folder },
+                            label = { Text(folder, maxLines = 1) },
+                        )
+                    }
+                }
+                Button(
+                    onClick = { onStartReview(reviewScope) },
+                    enabled = reviewCandidates > 0 || state.reviewFolderName == reviewScope,
+                    modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Icon(Icons.Default.Style, null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (state.reviewFolderName == reviewScope && state.currentSwipeSong != null) "Continue Review" else "Start Review · $reviewCandidates")
+                }
+                OutlinedButton(
+                    onClick = onOpenReviewDecisions,
+                    enabled = state.decisions.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Text("Accepted ${state.acceptedSongs.size} · Rejected ${state.rejectedSongs.size}")
+                }
+                Text(
+                    "Your position and decisions are saved when you leave Review.",
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
         item {
@@ -2066,10 +2224,16 @@ private fun ExpressiveSettings(
             SettingsPanel("About") {
                 Text("SwipeTune", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "A private, local-first music player with a swipe review mode.",
+                    "An open-source, local-first music player with an optional Review mode.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text("Version ${BuildConfig.VERSION_NAME}", modifier = Modifier.padding(top = 8.dp), style = MaterialTheme.typography.labelLarge)
+                Text(
+                    "GNU GPLv3 · Source: github.com/projectescape/swipetune · Provided without warranty.",
+                    modifier = Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
     }

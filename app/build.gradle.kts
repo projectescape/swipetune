@@ -51,6 +51,7 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.11.1")
     implementation("androidx.media3:media3-session:1.11.1")
     implementation("androidx.media3:media3-ui-compose:1.11.1")
+    implementation("org.jellyfin.media3:media3-ffmpeg-decoder:1.9.0+1")
     implementation("androidx.room:room-runtime:2.8.5")
     implementation("androidx.room:room-ktx:2.8.5")
     implementation("androidx.room:room-paging:2.8.5")
