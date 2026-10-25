@@ -307,7 +307,7 @@ private fun ExpressiveHeader(showingSettings: Boolean, onSettings: () -> Unit) {
             .padding(start = 22.dp, end = 14.dp, top = 10.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text("SwipeTune", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        Spacer(Modifier.weight(1f))
         IconButton(onClick = onSettings) {
             Icon(
                 imageVector = if (showingSettings) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Settings,

@@ -8,7 +8,7 @@
 4. Review decisions are global durable metadata. Rejected tracks remain hidden from every normal library collection; accepted tracks remain visible.
 5. Closing Review preserves its order, cursor, decision history, and scope. Reopening continues with the next unreviewed track. Changing scope creates a queue only from still-unreviewed tracks and never clears earlier decisions.
 6. Settings exposes accepted and rejected result lists with a clear-decision action for each track.
-7. Global chrome carries only the SwipeTune name. “Listen freely. Keep deliberately.” is removed from the main surface and may remain as quiet About copy.
+7. Global chrome carries no repeated brand wordmark. “Listen freely. Keep deliberately.” is removed from the main surface and may remain as quiet About copy.
 8. SwipeTune becomes a public GPLv3 project. The GPLv3 FFmpeg extension can then be distributed with corresponding source and notices.
 9. Remove the one-item bottom navigation and expose Settings from the library's top-right action.
 10. Add non-deletable Accepted and Rejected smart playlists derived from durable Review decisions.

@@ -16,7 +16,7 @@ A locked design system for the Android app. UI work reads this file before imple
 The app uses a listening-workbench structure:
 
 - Library is the default destination and automatically indexes device audio through MediaStore; user-picked folders are optional additional roots.
-- Library is the only primary surface. Settings is a top-right action, with no bottom navigation. Review is not a peer destination or part of the brand promise.
+- Library is the only primary surface. Settings is a top-right icon action, with no bottom navigation or repeated app wordmark. Review is not a peer destination or part of the brand promise.
 - Settings owns appearance, library sources and maintenance, playback preferences, Review launch/scope/history, and app information.
 - Review is a purpose-built, explicitly launched flow with its own playback queue and undo history. It can target all unreviewed music or one indexed folder.
 - A persistent mini-player floats above the system navigation inset whenever a track is loaded.
