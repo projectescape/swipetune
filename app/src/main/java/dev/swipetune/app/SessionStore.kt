@@ -27,6 +27,11 @@ class SessionStore(context: Context) {
             swipeOrder = root.optJSONArray("swipeOrder").toStringList(),
             swipeCursor = root.optInt("swipeCursor", 0),
             history = history,
+            favorites = root.optJSONArray("favorites").toStringList().toSet(),
+            playlists = root.optJSONArray("playlists").toPlaylists(),
+            themeMode = runCatching { ThemeMode.valueOf(root.optString("themeMode", ThemeMode.SYSTEM.name)) }
+                .getOrDefault(ThemeMode.SYSTEM),
+            dynamicColor = root.optBoolean("dynamicColor", true),
         )
     }.getOrElse { PersistedState() }
 
@@ -35,7 +40,16 @@ class SessionStore(context: Context) {
             put("folderUri", state.folderUri ?: "")
             put("songs", JSONArray().apply {
                 state.songs.forEach { song ->
-                    put(JSONObject().put("uri", song.uri).put("fileName", song.fileName))
+                    put(JSONObject().apply {
+                        put("uri", song.uri)
+                        put("fileName", song.fileName)
+                        put("title", song.title)
+                        put("artist", song.artist)
+                        put("album", song.album)
+                        put("folderName", song.folderName)
+                        put("durationMs", song.durationMs)
+                        put("trackNumber", song.trackNumber)
+                    })
                 }
             })
             put("decisions", JSONObject().apply {
@@ -48,6 +62,19 @@ class SessionStore(context: Context) {
                     put(JSONObject().put("uri", entry.uri).put("decision", entry.decision.name))
                 }
             })
+            put("favorites", JSONArray(state.favorites.toList()))
+            put("playlists", JSONArray().apply {
+                state.playlists.forEach { playlist ->
+                    put(
+                        JSONObject()
+                            .put("id", playlist.id)
+                            .put("name", playlist.name)
+                            .put("songs", JSONArray(playlist.songUris)),
+                    )
+                }
+            })
+            put("themeMode", state.themeMode.name)
+            put("dynamicColor", state.dynamicColor)
         }
         val output = file.startWrite()
         try {
@@ -65,7 +92,19 @@ private fun JSONArray?.toSongList(): List<SongRef> = buildList {
     repeat(array.length()) { index ->
         val item = array.optJSONObject(index) ?: return@repeat
         val uri = item.optString("uri")
-        if (uri.isNotBlank()) add(SongRef(uri, item.optString("fileName", "Unknown track")))
+        if (uri.isNotBlank()) add(
+            SongRef(
+                uri = uri,
+                fileName = item.optString("fileName", "Unknown track"),
+                title = item.optString("title").takeIf(String::isNotBlank)
+                    ?: item.optString("fileName", "Unknown track").substringBeforeLast('.'),
+                artist = item.optString("artist", "Unknown artist"),
+                album = item.optString("album", "Unknown album"),
+                folderName = item.optString("folderName", "Music"),
+                durationMs = item.optLong("durationMs", 0),
+                trackNumber = item.optInt("trackNumber", 0),
+            ),
+        )
     }
 }
 
@@ -81,6 +120,16 @@ private fun JSONArray?.toHistory(): List<ReviewEntry> = buildList {
         val decision = runCatching { ReviewDecision.valueOf(item.optString("decision")) }.getOrNull()
         val uri = item.optString("uri")
         if (uri.isNotBlank() && decision != null) add(ReviewEntry(uri, decision))
+    }
+}
+
+private fun JSONArray?.toPlaylists(): List<UserPlaylist> = buildList {
+    val array = this@toPlaylists ?: return@buildList
+    repeat(array.length()) { index ->
+        val item = array.optJSONObject(index) ?: return@repeat
+        val id = item.optString("id").takeIf(String::isNotBlank) ?: return@repeat
+        val name = item.optString("name").takeIf(String::isNotBlank) ?: return@repeat
+        add(UserPlaylist(id, name, item.optJSONArray("songs").toStringList()))
     }
 }
 

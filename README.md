@@ -7,12 +7,19 @@ SwipeTune is a private, local-first Android music player with a swipe-based libr
 - Pick any music folder with Android's system folder picker.
 - Play local MP3, FLAC, M4A, AAC, WAV, and OGG files.
 - View embedded album art, title, artist, and album metadata.
+- Browse songs, albums, artists, folders, favorites, and persistent local playlists.
+- Search and sort the library, play collections, and shuffle the visible library.
+- Use a persistent mini-player or an immersive full player with seek, previous/next, shuffle, repeat, favorite, and queue controls.
+- Continue playback in the background with Android lock-screen, notification, Bluetooth, and headset controls through Media3.
+- Resume the last queue, track, position, shuffle state, and repeat state after service recreation.
+- Choose System, Light, or Dark appearance and independently enable Android dynamic color.
 - Material 3 Expressive interface with dynamic color, album-art atmosphere, frosted floating controls, and spring motion.
 - Play/pause, seek, and jump backward or forward ten seconds.
 - Review songs in a persisted random, non-repeating order.
 - Swipe right to keep and left to reject.
 - Undo returns to the previous song and reverses its decision.
 - Rejected songs are hidden from the normal music library without changing their files.
+- Entering Review temporarily preserves the normal playback queue and restores it on exit.
 - Restore rejected songs, or permanently delete them only after an explicit confirmation.
 - No account, server, analytics, or collection-specific data.
 

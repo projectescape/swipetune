@@ -1,5 +1,8 @@
 package dev.swipetune.app
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
@@ -11,14 +14,17 @@ import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 
 /* Hallmark · pre-emit critique: P5 H5 E4 S5 R4 V5
  * macrostructure: Workbench · tone: atmospheric-playful · anchor hue: dynamic
@@ -142,4 +148,49 @@ internal fun ExpressiveSwipeTuneTheme(content: @Composable () -> Unit) {
         typography = ExpressiveTypography,
         content = content,
     )
+}
+
+@OptIn(ExperimentalMaterial3ExpressiveApi::class)
+@Composable
+internal fun ExpressiveSwipeTuneTheme(
+    themeMode: ThemeMode,
+    dynamicColor: Boolean,
+    content: @Composable () -> Unit,
+) {
+    val context = LocalContext.current
+    val systemDark = isSystemInDarkTheme()
+    val dark = when (themeMode) {
+        ThemeMode.SYSTEM -> systemDark
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
+    val colors = when {
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && dark -> dynamicDarkColorScheme(context)
+        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> dynamicLightColorScheme(context)
+        dark -> FallbackDarkColors
+        else -> FallbackLightColors
+    }
+    val view = LocalView.current
+
+    SideEffect {
+        context.findActivity()?.window?.let { window ->
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
+
+    MaterialExpressiveTheme(
+        colorScheme = colors,
+        shapes = ExpressiveShapes,
+        typography = ExpressiveTypography,
+        content = content,
+    )
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }

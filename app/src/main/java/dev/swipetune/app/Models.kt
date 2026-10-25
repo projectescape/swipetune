@@ -5,6 +5,12 @@ import android.graphics.Bitmap
 data class SongRef(
     val uri: String,
     val fileName: String,
+    val title: String = fileName.substringBeforeLast('.'),
+    val artist: String = "Unknown artist",
+    val album: String = "Unknown album",
+    val folderName: String = "Music",
+    val durationMs: Long = 0,
+    val trackNumber: Int = 0,
 )
 
 data class TrackMetadata(
@@ -16,9 +22,19 @@ data class TrackMetadata(
 
 enum class ReviewDecision { KEPT, REJECTED }
 
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+enum class RepeatMode { OFF, ALL, ONE }
+
 data class ReviewEntry(
     val uri: String,
     val decision: ReviewDecision,
+)
+
+data class UserPlaylist(
+    val id: String,
+    val name: String,
+    val songUris: List<String> = emptyList(),
 )
 
 data class PersistedState(
@@ -28,6 +44,10 @@ data class PersistedState(
     val swipeOrder: List<String> = emptyList(),
     val swipeCursor: Int = 0,
     val history: List<ReviewEntry> = emptyList(),
+    val favorites: Set<String> = emptySet(),
+    val playlists: List<UserPlaylist> = emptyList(),
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val dynamicColor: Boolean = true,
 )
 
 data class AppUiState(
@@ -46,6 +66,14 @@ data class AppUiState(
     val isPlaying: Boolean = false,
     val positionMs: Long = 0,
     val durationMs: Long = 0,
+    val artworkByUri: Map<String, Bitmap> = emptyMap(),
+    val favorites: Set<String> = emptySet(),
+    val playlists: List<UserPlaylist> = emptyList(),
+    val playbackQueue: List<String> = emptyList(),
+    val shuffleEnabled: Boolean = false,
+    val repeatMode: RepeatMode = RepeatMode.OFF,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val dynamicColor: Boolean = true,
 ) {
     val visibleSongs: List<SongRef>
         get() = songs.filter { decisions[it.uri] != ReviewDecision.REJECTED }
@@ -57,5 +85,10 @@ data class AppUiState(
         get() = swipeOrder.getOrNull(swipeCursor)?.let { uri -> songs.firstOrNull { it.uri == uri } }
 
     val reviewedCount: Int get() = decisions.size
+
+    val nowPlayingSong: SongRef?
+        get() = songs.firstOrNull { it.uri == nowPlayingUri }
+
+    fun isFavorite(song: SongRef): Boolean = song.uri in favorites
 }
 
