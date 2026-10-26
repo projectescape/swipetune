@@ -2,8 +2,10 @@ package dev.swipetune.app
 
 import android.app.Application
 import android.content.ComponentName
+import android.content.IntentSender
 import android.database.ContentObserver
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.provider.MediaStore
@@ -23,6 +25,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.Job
@@ -55,6 +58,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private var mediaStoreRescanJob: Job? = null
     private var lastForegroundRefreshMs = 0L
     private val sessionSaves = Channel<PersistedState>(Channel.CONFLATED)
+    private val _deleteRequests = Channel<IntentSender>(Channel.BUFFERED)
+    val deleteRequests = _deleteRequests.receiveAsFlow()
+    private var pendingDeletion: PendingDeletion? = null
     private val mediaStoreObserver = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean, uri: Uri?) {
             mediaStoreRescanJob?.cancel()
@@ -252,6 +258,28 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
+    fun setReviewDecision(song: SongRef, decision: ReviewDecision?) {
+        if (decision == null) {
+            clearReviewDecision(song)
+            _state.update { it.copy(statusMessage = "Review decision cleared") }
+            return
+        }
+        val current = _state.value.toPersisted()
+        val reviewed = current.swipeOrder.take(current.swipeCursor).filterNot { it == song.uri }
+        val pending = current.swipeOrder.drop(current.swipeCursor).filterNot { it == song.uri }
+        saveAndShow(
+            current.copy(
+                decisions = current.decisions + (song.uri to decision),
+                swipeOrder = reviewed + pending,
+                swipeCursor = reviewed.size,
+                history = current.history + ReviewEntry(song.uri, decision),
+            ),
+        )
+        _state.update {
+            it.copy(statusMessage = if (decision == ReviewDecision.KEPT) "Marked accepted" else "Marked rejected")
+        }
+    }
+
     fun play(song: SongRef, autoplay: Boolean = true) {
         playQueue(_state.value.visibleSongs, song, autoplay)
     }
@@ -332,13 +360,18 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun nextVisibleSong() {
-        player?.takeIf(Player::hasNextMediaItem)?.seekToNextMediaItem()
+        val player = player?.takeIf(Player::hasNextMediaItem) ?: return
+        showSongPreview(player.nextMediaItemIndex)
+        player.seekToNextMediaItem()
     }
 
     fun previousVisibleSong() {
         val player = player ?: return
         if (player.currentPosition > 3_000) player.seekTo(0)
-        else if (player.hasPreviousMediaItem()) player.seekToPreviousMediaItem()
+        else if (player.hasPreviousMediaItem()) {
+            showSongPreview(player.previousMediaItemIndex)
+            player.seekToPreviousMediaItem()
+        }
     }
 
     fun shuffleLibrary() {
@@ -729,36 +762,86 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         saveAndShow(current.copy(swipeOrder = order, swipeCursor = 0, history = emptyList()))
     }
 
-    fun deleteRejected() {
+    fun requestDeleteRejected() = requestDeleteSongs(_state.value.rejectedSongs)
+
+    fun requestDeleteSong(song: SongRef) = requestDeleteSongs(listOf(song))
+
+    private fun requestDeleteSongs(songs: List<SongRef>) {
+        if (_state.value.isDeleting || songs.isEmpty()) return
         viewModelScope.launch {
-            val rejected = _state.value.rejectedSongs
-            if (rejected.isEmpty()) return@launch
-            _state.update { it.copy(isDeleting = true, statusMessage = "Deleting rejected files…") }
-            val deleted = withContext(Dispatchers.IO) { rejected.filter(repository::delete) }
-            val deletedUris = deleted.mapTo(hashSetOf(), SongRef::uri)
-            val deletedCurrentTrack = _state.value.nowPlayingUri in deletedUris
-            val current = _state.value.toPersisted()
-            val next = current.copy(
+            val distinct = songs.distinctBy(SongRef::uri)
+            _state.update { it.copy(isDeleting = true, statusMessage = "Preparing deletion…", errorMessage = null) }
+            val direct = withContext(Dispatchers.IO) {
+                distinct.filter(repository::canDeleteDirectly).filter(repository::deleteDocument)
+            }
+            val directlyDeletedUris = direct.mapTo(hashSetOf(), SongRef::uri)
+            val remaining = distinct.filterNot { it.uri in directlyDeletedUris }
+            if (remaining.isEmpty()) {
+                finishDeletion(direct, distinct.size)
+                return@launch
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val intentSender = runCatching {
+                    MediaStore.createDeleteRequest(
+                        getApplication<Application>().contentResolver,
+                        remaining.map { Uri.parse(it.uri) },
+                    ).intentSender
+                }.getOrNull()
+                if (intentSender != null) {
+                    pendingDeletion = PendingDeletion(remaining, direct, distinct.size)
+                    _state.update { it.copy(statusMessage = "Confirm deletion with Android") }
+                    _deleteRequests.send(intentSender)
+                    return@launch
+                }
+            }
+
+            val legacyDeleted = withContext(Dispatchers.IO) { remaining.filter(repository::deleteMediaStore) }
+            finishDeletion(direct + legacyDeleted, distinct.size)
+        }
+    }
+
+    fun completeDeleteRequest(approved: Boolean) {
+        val pending = pendingDeletion ?: return
+        pendingDeletion = null
+        if (approved) {
+            finishDeletion(pending.directlyDeleted + pending.awaitingApproval, pending.requestedCount)
+        } else {
+            finishDeletion(pending.directlyDeleted, pending.requestedCount, canceled = true)
+        }
+    }
+
+    private fun finishDeletion(deleted: List<SongRef>, requestedCount: Int, canceled: Boolean = false) {
+        val deletedUris = deleted.mapTo(hashSetOf(), SongRef::uri)
+        val deletedCurrentTrack = _state.value.nowPlayingUri in deletedUris
+        val current = _state.value.toPersisted()
+        saveAndShow(
+            current.copy(
                 songs = current.songs.filterNot { it.uri in deletedUris },
                 decisions = current.decisions.filterKeys { it !in deletedUris },
                 swipeOrder = current.swipeOrder.filterNot { it in deletedUris },
                 history = current.history.filterNot { it.uri in deletedUris },
+                favorites = current.favorites.filterNot { it in deletedUris }.toSet(),
                 playlists = current.playlists.map { playlist ->
                     playlist.copy(songUris = playlist.songUris.filterNot { it in deletedUris })
                 },
+            ),
+        )
+        if (deletedCurrentTrack) {
+            player?.stop()
+            player?.clearMediaItems()
+            clearNowPlaying()
+        }
+        _state.update {
+            it.copy(
+                isDeleting = false,
+                statusMessage = when {
+                    canceled && deleted.isEmpty() -> "Deletion canceled"
+                    canceled -> "Deleted ${deleted.size} files; remaining deletion canceled"
+                    deleted.size == requestedCount -> "Deleted ${deleted.size} ${if (deleted.size == 1) "file" else "files"}"
+                    else -> "Deleted ${deleted.size} of $requestedCount files"
+                },
             )
-            saveAndShow(next)
-            if (deletedCurrentTrack) {
-                player?.stop()
-                player?.clearMediaItems()
-                clearNowPlaying()
-            }
-            _state.update {
-                it.copy(
-                    isDeleting = false,
-                    statusMessage = "Deleted ${deleted.size} of ${rejected.size} rejected files",
-                )
-            }
         }
     }
 
@@ -922,6 +1005,22 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun showSongPreview(index: Int) {
+        val player = player ?: return
+        if (index !in 0 until player.mediaItemCount) return
+        val uri = player.getMediaItemAt(index).mediaId
+        val song = _state.value.songs.firstOrNull { it.uri == uri } ?: return
+        _state.update {
+            it.copy(
+                nowPlayingUri = song.uri,
+                metadata = TrackMetadata(song.title, song.artist, song.album, it.artworkByUri[song.uri]),
+                positionMs = 0,
+                durationMs = song.durationMs,
+                lyrics = emptyList(),
+            )
+        }
+    }
+
     private fun updatePlaybackPosition() {
         val player = player ?: return
         _state.update {
@@ -1010,6 +1109,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
 private const val QUEUE_START_WINDOW = 32
 private const val QUEUE_CHUNK_SIZE = 128
 private const val FOREGROUND_REFRESH_COOLDOWN_MS = 60_000L
+
+private data class PendingDeletion(
+    val awaitingApproval: List<SongRef>,
+    val directlyDeleted: List<SongRef>,
+    val requestedCount: Int,
+)
 
 private fun PersistedState.toUiState() = AppUiState(
     folderUri = folderUri,

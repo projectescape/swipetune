@@ -71,8 +71,17 @@ class MusicRepository(private val context: Context) {
         }
     }
 
-    fun delete(song: SongRef): Boolean = runCatching {
-        DocumentsContract.deleteDocument(context.contentResolver, Uri.parse(song.uri))
+    fun canDeleteDirectly(song: SongRef): Boolean =
+        DocumentsContract.isDocumentUri(context, Uri.parse(song.uri))
+
+    fun deleteDocument(song: SongRef): Boolean = runCatching {
+        val uri = Uri.parse(song.uri)
+        DocumentsContract.isDocumentUri(context, uri) &&
+            DocumentsContract.deleteDocument(context.contentResolver, uri)
+    }.getOrDefault(false)
+
+    fun deleteMediaStore(song: SongRef): Boolean = runCatching {
+        context.contentResolver.delete(Uri.parse(song.uri), null, null) > 0
     }.getOrDefault(false)
 
     private fun DocumentFile.isAudio(): Boolean {

@@ -48,8 +48,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
@@ -132,7 +134,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -143,6 +147,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -173,6 +178,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlin.math.abs
+import kotlin.math.roundToInt
 
 private enum class ExpressiveScreen { LIBRARY, REVIEW, REVIEW_DECISIONS, SETTINGS }
 private enum class PlayerPane { NOW_PLAYING, LYRICS, QUEUE }
@@ -754,15 +760,22 @@ private fun LibraryPage(
     }
 
     when (view) {
-        LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> LazyColumn(
-            modifier = modifier,
-            contentPadding = PaddingValues(horizontal = ScreenEdge, vertical = 4.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            items(songs, key = SongRef::uri) { song ->
-                Box(Modifier.animateItem(fadeInSpec = tween(150), fadeOutSpec = tween(120), placementSpec = tween(190))) {
-                    ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
+        LibraryView.SONGS, LibraryView.FAVORITES, LibraryView.HISTORY -> {
+            val listState = rememberLazyListState()
+            Box(modifier) {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize().padding(end = 8.dp),
+                    state = listState,
+                    contentPadding = PaddingValues(start = ScreenEdge, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(songs, key = SongRef::uri) { song ->
+                        Box(Modifier.animateItem(fadeInSpec = tween(150), fadeOutSpec = tween(120), placementSpec = tween(190))) {
+                            ExpressiveSongRow(song, state, viewModel) { viewModel.playCollection(songs, song) }
+                        }
+                    }
                 }
+                ExpressiveVerticalScrollbar(listState, Modifier.align(Alignment.CenterEnd))
             }
         }
         LibraryView.ALBUMS -> LibraryCollections(
@@ -1046,6 +1059,8 @@ private fun SmartPlaylistDetail(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var confirmDeleteAll by remember { mutableStateOf(false) }
+    var deleteSong by remember { mutableStateOf<SongRef?>(null) }
     Column(modifier) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = ScreenEdge, vertical = 6.dp),
@@ -1055,16 +1070,35 @@ private fun SmartPlaylistDetail(
             Column(Modifier.weight(1f)) {
                 Text(name, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    if (rejected) "${songs.size} songs · hidden elsewhere" else "${songs.size} songs · kept in Review",
+                    if (rejected) {
+                        "${songs.size} ${if (songs.size == 1) "song" else "songs"} · hidden elsewhere"
+                    } else {
+                        "${songs.size} ${if (songs.size == 1) "song" else "songs"} · kept in Review"
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+            if (rejected) {
+                Button(
+                    onClick = { confirmDeleteAll = true },
+                    enabled = songs.isNotEmpty() && !state.isDeleting,
+                    contentPadding = PaddingValues(horizontal = 12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.errorContainer,
+                        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                    ),
+                ) {
+                    Icon(Icons.Default.DeleteOutline, null, Modifier.size(20.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text("Delete all")
+                }
             }
             FilledIconButton(onClick = { if (songs.isNotEmpty()) viewModel.playCollection(songs) }, enabled = songs.isNotEmpty()) {
                 Icon(Icons.Default.PlayArrow, "Play $name")
             }
         }
         Text(
-            "Built in · updates automatically · cannot be deleted",
+            "Built in · updates automatically · playlist cannot be deleted",
             modifier = Modifier.padding(horizontal = ScreenEdge, vertical = 4.dp),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1089,13 +1123,63 @@ private fun SmartPlaylistDetail(
                             Text(song.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(song.artist, maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
-                        TextButton(onClick = { viewModel.clearReviewDecision(song) }) {
-                            Text(if (rejected) "Restore" else "Unmark")
+                        IconButton(onClick = { viewModel.clearReviewDecision(song) }) {
+                            Icon(
+                                Icons.Default.Restore,
+                                if (rejected) "Restore ${song.title} to library" else "Clear accepted decision for ${song.title}",
+                            )
+                        }
+                        if (rejected) {
+                            IconButton(onClick = { deleteSong = song }, enabled = !state.isDeleting) {
+                                Icon(Icons.Default.DeleteOutline, "Delete ${song.title} from device")
+                            }
                         }
                     }
                 }
             }
         }
+    }
+    if (confirmDeleteAll) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteAll = false },
+            icon = { Icon(Icons.Default.Warning, null) },
+            title = { Text("Delete all rejected files?") },
+            text = { Text("This permanently removes ${songs.size} ${if (songs.size == 1) "song" else "songs"} from this device.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDeleteAll = false
+                        viewModel.requestDeleteRejected()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Delete all") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteAll = false }) { Text("Cancel") } },
+        )
+    }
+    deleteSong?.let { song ->
+        AlertDialog(
+            onDismissRequest = { deleteSong = null },
+            icon = { Icon(Icons.Default.DeleteOutline, null) },
+            title = { Text("Delete this song?") },
+            text = { Text("${song.title} will be permanently removed from this device.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        deleteSong = null
+                        viewModel.requestDeleteSong(song)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { deleteSong = null }) { Text("Cancel") } },
+        )
     }
 }
 
@@ -1195,6 +1279,93 @@ private fun CollectionDetail(
 }
 
 @Composable
+private fun ExpressiveVerticalScrollbar(
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    modifier: Modifier = Modifier,
+) {
+    val metrics by remember(listState) {
+        derivedStateOf {
+            val layout = listState.layoutInfo
+            val total = layout.totalItemsCount
+            val visible = layout.visibleItemsInfo.size
+            ScrollbarMetrics(
+                totalItems = total,
+                visibleItems = visible,
+                firstVisibleItem = listState.firstVisibleItemIndex,
+                canScroll = listState.canScrollBackward || listState.canScrollForward,
+            )
+        }
+    }
+    if (!metrics.canScroll || metrics.totalItems <= 0) return
+
+    val scope = rememberCoroutineScope()
+    val density = LocalDensity.current
+    var dragging by remember { mutableStateOf(false) }
+    var dragY by remember { mutableFloatStateOf(0f) }
+    val indicatorWidth by animateDpAsState(
+        targetValue = if (dragging) 10.dp else 5.dp,
+        animationSpec = tween(140),
+        label = "library scrollbar width",
+    )
+    val trackColor = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = .72f)
+    val indicatorColor = MaterialTheme.colorScheme.primary
+
+    BoxWithConstraints(
+        modifier
+            .fillMaxHeight()
+            .width(28.dp)
+            .pointerInput(metrics.totalItems) {
+                fun scrollToPosition(y: Float) {
+                    val progress = (y / size.height.coerceAtLeast(1)).coerceIn(0f, 1f)
+                    val target = (progress * (metrics.totalItems - 1)).roundToInt()
+                    scope.launch { listState.scrollToItem(target) }
+                }
+                detectDragGestures(
+                    onDragStart = { start ->
+                        dragging = true
+                        dragY = start.y
+                        scrollToPosition(dragY)
+                    },
+                    onDragCancel = { dragging = false },
+                    onDragEnd = { dragging = false },
+                    onDrag = { change, amount ->
+                        change.consume()
+                        dragY = (dragY + amount.y).coerceIn(0f, size.height.toFloat())
+                        scrollToPosition(dragY)
+                    },
+                )
+            },
+    ) {
+        val heightPx = with(density) { maxHeight.toPx() }.coerceAtLeast(1f)
+        val minThumbPx = with(density) { 48.dp.toPx() }
+        val thumbHeight = (heightPx * metrics.visibleItems / metrics.totalItems.toFloat())
+            .coerceIn(minThumbPx, heightPx)
+        val maxFirst = (metrics.totalItems - metrics.visibleItems).coerceAtLeast(1)
+        val progress = (metrics.firstVisibleItem / maxFirst.toFloat()).coerceIn(0f, 1f)
+        val thumbTop = progress * (heightPx - thumbHeight)
+        val indicatorWidthPx = with(density) { indicatorWidth.toPx() }
+        Canvas(Modifier.fillMaxSize()) {
+            val x = size.width - with(density) { 7.dp.toPx() }
+            drawLine(trackColor, Offset(x, 0f), Offset(x, size.height), strokeWidth = with(density) { 2.dp.toPx() }, cap = StrokeCap.Round)
+            drawLine(
+                indicatorColor,
+                Offset(x, thumbTop),
+                Offset(x, thumbTop + thumbHeight),
+                strokeWidth = indicatorWidthPx,
+                cap = StrokeCap.Round,
+            )
+        }
+    }
+}
+
+private data class ScrollbarMetrics(
+    val totalItems: Int,
+    val visibleItems: Int,
+    val firstVisibleItem: Int,
+    val canScroll: Boolean,
+)
+
+@Composable
 private fun EmptyLibrary(modifier: Modifier = Modifier) {
     Column(
         modifier.fillMaxWidth().padding(32.dp),
@@ -1212,6 +1383,8 @@ private fun EmptyLibrary(modifier: Modifier = Modifier) {
 @Composable
 private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: MusicViewModel, onClick: () -> Unit) {
     var showMenu by remember(song.uri) { mutableStateOf(false) }
+    var showPlaylistPicker by remember(song.uri) { mutableStateOf(false) }
+    var confirmDelete by remember(song.uri) { mutableStateOf(false) }
     val playing = song.uri == state.nowPlayingUri
     val selected = song.uri in state.selectedSongUris
     val corner by animateDpAsState(
@@ -1278,29 +1451,84 @@ private fun ExpressiveSongRow(song: SongRef, state: AppUiState, viewModel: Music
                     onClick = { viewModel.appendToQueue(listOf(song)); showMenu = false },
                     leadingIcon = { Icon(Icons.AutoMirrored.Filled.QueueMusic, null) },
                 )
-                if (state.playlists.isEmpty()) {
-                    DropdownMenuItem(
-                        text = { Text("Create a playlist first") },
-                        onClick = { showMenu = false },
-                        enabled = false,
-                        leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
-                    )
-                } else {
-                    state.playlists.forEach { playlist ->
-                        val alreadyAdded = song.uri in playlist.songUris
-                        DropdownMenuItem(
-                            text = { Text(if (alreadyAdded) "In ${playlist.name}" else "Add to ${playlist.name}") },
-                            onClick = {
-                                viewModel.addToPlaylist(playlist.id, song)
-                                showMenu = false
-                            },
-                            enabled = !alreadyAdded,
-                            leadingIcon = { Icon(if (alreadyAdded) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd, null) },
-                        )
-                    }
-                }
+                DropdownMenuItem(
+                    text = { Text("Add to playlist") },
+                    onClick = {
+                        showMenu = false
+                        showPlaylistPicker = true
+                    },
+                    enabled = state.playlists.isNotEmpty(),
+                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
+                )
+                HorizontalDivider()
+                DropdownMenuItem(
+                    text = { Text("Delete from device") },
+                    onClick = {
+                        showMenu = false
+                        confirmDelete = true
+                    },
+                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                )
             }
         }
+    }
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            icon = { Icon(Icons.Default.DeleteOutline, null) },
+            title = { Text("Delete this song?") },
+            text = { Text("${song.title} will be permanently removed from this device.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDelete = false
+                        viewModel.requestDeleteSong(song)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDelete = false }) { Text("Cancel") } },
+        )
+    }
+    if (showPlaylistPicker) {
+        AlertDialog(
+            onDismissRequest = { showPlaylistPicker = false },
+            icon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
+            title = { Text("Add to playlist") },
+            text = {
+                LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(state.playlists, key = UserPlaylist::id) { playlist ->
+                        val alreadyAdded = song.uri in playlist.songUris
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable(enabled = !alreadyAdded) {
+                                    viewModel.addToPlaylist(playlist.id, song)
+                                    showPlaylistPicker = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(if (alreadyAdded) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd, null)
+                            Text(
+                                if (alreadyAdded) "${playlist.name} · added" else playlist.name,
+                                Modifier.weight(1f).padding(start = 12.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showPlaylistPicker = false }) { Text("Done") } },
+        )
     }
 }
 
@@ -1562,6 +1790,82 @@ private fun DecisionPill(
     ) {
         icon()
         Text(text, color = color, fontWeight = FontWeight.Black, style = MaterialTheme.typography.labelLarge)
+    }
+}
+
+@Composable
+private fun SwipeablePlayerArtwork(
+    state: AppUiState,
+    viewModel: MusicViewModel,
+    modifier: Modifier,
+    shape: RoundedCornerShape,
+) {
+    var dragOffset by remember { mutableFloatStateOf(0f) }
+    var dragging by remember { mutableStateOf(false) }
+    val displayedOffset by animateFloatAsState(
+        targetValue = dragOffset,
+        animationSpec = if (dragging) tween(16) else spring(stiffness = 520f),
+        label = "player artwork swipe",
+    )
+    BoxWithConstraints(modifier) {
+        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }.coerceAtLeast(1f)
+        val threshold = widthPx * .18f
+        Box(
+            Modifier
+                .fillMaxSize()
+                .pointerInput(state.nowPlayingUri) {
+                    detectDragGestures(
+                        onDragStart = { dragging = true },
+                        onDragCancel = {
+                            dragging = false
+                            dragOffset = 0f
+                        },
+                        onDragEnd = {
+                            val releaseOffset = dragOffset
+                            dragging = false
+                            if (abs(releaseOffset) >= threshold) {
+                                if (releaseOffset < 0) viewModel.nextVisibleSong() else viewModel.previousVisibleSong()
+                            }
+                            dragOffset = 0f
+                        },
+                        onDrag = { change, amount ->
+                            if (abs(amount.x) >= abs(amount.y)) {
+                                change.consume()
+                                dragOffset = (dragOffset + amount.x).coerceIn(-widthPx, widthPx)
+                            }
+                        },
+                    )
+                },
+        ) {
+            ExpressiveArtwork(
+                state,
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        translationX = displayedOffset
+                        rotationZ = (displayedOffset / widthPx) * 2.5f
+                        alpha = 1f - (abs(displayedOffset) / widthPx) * .28f
+                    },
+                shape,
+            )
+            val cueAlpha = (abs(displayedOffset) / threshold).coerceIn(0f, 1f)
+            if (cueAlpha > 0f) {
+                Surface(
+                    modifier = Modifier
+                        .align(if (displayedOffset < 0) Alignment.CenterEnd else Alignment.CenterStart)
+                        .padding(16.dp)
+                        .alpha(cueAlpha),
+                    shape = RoundedCornerShape(18.dp),
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = .86f),
+                ) {
+                    Icon(
+                        if (displayedOffset < 0) Icons.Default.SkipNext else Icons.Default.SkipPrevious,
+                        if (displayedOffset < 0) "Release for next song" else "Release for previous song",
+                        Modifier.padding(12.dp),
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -1984,7 +2288,7 @@ private fun ExpressiveReviewDecisions(state: AppUiState, viewModel: MusicViewMod
             text = { Text("This removes ${state.rejectedSongs.size} audio files from the selected folder. This cannot be undone.") },
             confirmButton = {
                 Button(
-                    onClick = { confirmDelete = false; viewModel.deleteRejected() },
+                    onClick = { confirmDelete = false; viewModel.requestDeleteRejected() },
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
                         contentColor = MaterialTheme.colorScheme.onError,
@@ -2005,6 +2309,9 @@ private fun FullPlayerOverlay(
     var showQueue by remember { mutableStateOf(false) }
     var showSaveQueue by remember { mutableStateOf(false) }
     var showLyrics by remember { mutableStateOf(false) }
+    var showPlayerMenu by remember { mutableStateOf(false) }
+    var showPlaylistPicker by remember { mutableStateOf(false) }
+    var confirmDeleteSong by remember { mutableStateOf(false) }
     val lyricsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri?.let(viewModel::importLyrics)
     }
@@ -2057,6 +2364,64 @@ private fun FullPlayerOverlay(
                     TextButton(onClick = { showLyrics = !showLyrics; showQueue = false }) { Text("Lyrics") }
                     IconButton(onClick = { showQueue = !showQueue }) {
                         Icon(Icons.AutoMirrored.Filled.QueueMusic, if (showQueue) "Hide queue" else "Show queue")
+                    }
+                    state.nowPlayingSong?.let { song ->
+                        Box {
+                            IconButton(onClick = { showPlayerMenu = true }) {
+                                Icon(Icons.Default.MoreVert, "More playback options")
+                            }
+                            DropdownMenu(expanded = showPlayerMenu, onDismissRequest = { showPlayerMenu = false }) {
+                                DropdownMenuItem(
+                                    text = { Text("Add to playlist") },
+                                    onClick = {
+                                        showPlayerMenu = false
+                                        showPlaylistPicker = true
+                                    },
+                                    enabled = state.playlists.isNotEmpty(),
+                                    leadingIcon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
+                                )
+                                val reviewDecision = state.decisions[song.uri]
+                                if (reviewDecision != ReviewDecision.KEPT) {
+                                    DropdownMenuItem(
+                                        text = { Text("Mark accepted") },
+                                        onClick = {
+                                            showPlayerMenu = false
+                                            viewModel.setReviewDecision(song, ReviewDecision.KEPT)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Check, null) },
+                                    )
+                                }
+                                if (reviewDecision != ReviewDecision.REJECTED) {
+                                    DropdownMenuItem(
+                                        text = { Text("Mark rejected") },
+                                        onClick = {
+                                            showPlayerMenu = false
+                                            viewModel.setReviewDecision(song, ReviewDecision.REJECTED)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Close, null) },
+                                    )
+                                }
+                                if (reviewDecision != null) {
+                                    DropdownMenuItem(
+                                        text = { Text("Clear Review decision") },
+                                        onClick = {
+                                            showPlayerMenu = false
+                                            viewModel.setReviewDecision(song, null)
+                                        },
+                                        leadingIcon = { Icon(Icons.Default.Restore, null) },
+                                    )
+                                }
+                                HorizontalDivider()
+                                DropdownMenuItem(
+                                    text = { Text("Delete from device") },
+                                    onClick = {
+                                        showPlayerMenu = false
+                                        confirmDeleteSong = true
+                                    },
+                                    leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -2193,8 +2558,9 @@ private fun FullPlayerOverlay(
                             horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.Center,
                         ) {
-                            ExpressiveArtwork(
+                            SwipeablePlayerArtwork(
                                 state,
+                                viewModel,
                                 Modifier.size(artworkSize),
                                 RoundedCornerShape(topStart = 42.dp, topEnd = 26.dp, bottomEnd = 42.dp, bottomStart = 26.dp),
                             )
@@ -2276,6 +2642,65 @@ private fun FullPlayerOverlay(
                 }
             },
             dismissButton = { TextButton(onClick = { showSaveQueue = false }) { Text("Cancel") } },
+        )
+    }
+    val currentSong = state.nowPlayingSong
+    if (showPlaylistPicker && currentSong != null) {
+        AlertDialog(
+            onDismissRequest = { showPlaylistPicker = false },
+            icon = { Icon(Icons.AutoMirrored.Filled.PlaylistAdd, null) },
+            title = { Text("Add to playlist") },
+            text = {
+                LazyColumn(
+                    Modifier.fillMaxWidth().heightIn(max = 360.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    items(state.playlists, key = UserPlaylist::id) { playlist ->
+                        val alreadyAdded = currentSong.uri in playlist.songUris
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(16.dp))
+                                .clickable(enabled = !alreadyAdded) {
+                                    viewModel.addToPlaylist(playlist.id, currentSong)
+                                    showPlaylistPicker = false
+                                }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(if (alreadyAdded) Icons.Default.Check else Icons.AutoMirrored.Filled.PlaylistAdd, null)
+                            Text(
+                                if (alreadyAdded) "${playlist.name} · added" else playlist.name,
+                                Modifier.weight(1f).padding(start = 12.dp),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showPlaylistPicker = false }) { Text("Done") } },
+        )
+    }
+    if (confirmDeleteSong && currentSong != null) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteSong = false },
+            icon = { Icon(Icons.Default.DeleteOutline, null) },
+            title = { Text("Delete this song?") },
+            text = { Text("${currentSong.title} will be permanently removed from this device.") },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        confirmDeleteSong = false
+                        viewModel.requestDeleteSong(currentSong)
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError,
+                    ),
+                ) { Text("Delete") }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteSong = false }) { Text("Cancel") } },
         )
     }
 }

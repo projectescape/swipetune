@@ -1,6 +1,7 @@
 package dev.swipetune.app
 
 import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -10,6 +11,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.viewModels
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.LaunchedEffect
@@ -44,9 +46,17 @@ class MainActivity : ComponentActivity() {
                     }
                     viewModel.loadFolder(uri)
                 }
+                val deleteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+                    viewModel.completeDeleteRequest(result.resultCode == Activity.RESULT_OK)
+                }
                 LaunchedEffect(Unit) {
                     if (ContextCompat.checkSelfPermission(this@MainActivity, audioPermission) != PackageManager.PERMISSION_GRANTED) {
                         permissionLauncher.launch(audioPermission)
+                    }
+                }
+                LaunchedEffect(viewModel) {
+                    viewModel.deleteRequests.collect { intentSender ->
+                        deleteLauncher.launch(IntentSenderRequest.Builder(intentSender).build())
                     }
                 }
                 ExpressiveSwipeTuneApp(viewModel, onChooseFolder = { folderPicker.launch(null) })
