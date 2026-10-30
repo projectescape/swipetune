@@ -1,5 +1,7 @@
 package dev.swipetune.app
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -2047,17 +2049,14 @@ private fun ExpressiveSeekBar(
 ) {
     var dragging by remember { mutableStateOf(false) }
     var scrubPosition by remember { mutableStateOf(0f) }
+    var pendingSeekPosition by remember(state.nowPlayingUri) { mutableStateOf<Float?>(null) }
     var hapticStep by remember { mutableStateOf(-1) }
     val haptics = LocalHapticFeedback.current
     val density = LocalDensity.current
     val duration = state.durationMs.coerceAtLeast(1).toFloat()
     val currentPosition = state.positionMs.coerceIn(0, state.durationMs.coerceAtLeast(0)).toFloat()
-    val smoothPosition by animateFloatAsState(
-        targetValue = currentPosition,
-        animationSpec = tween(if (state.isPlaying) 520 else 160, easing = LinearEasing),
-        label = "smooth playback position",
-    )
-    val displayedPosition = if (dragging) scrubPosition else smoothPosition
+    val smoothPosition = remember(state.nowPlayingUri) { Animatable(currentPosition) }
+    val displayedPosition = if (dragging) scrubPosition else pendingSeekPosition ?: smoothPosition.value
     val amplitude by animateFloatAsState(
         targetValue = if (state.isPlaying && !dragging) 1f else 0f,
         animationSpec = tween(260),
@@ -2076,8 +2075,23 @@ private fun ExpressiveSeekBar(
     val primary = MaterialTheme.colorScheme.primary
     val inactive = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    LaunchedEffect(state.nowPlayingUri, currentPosition, dragging) {
-        if (!dragging) scrubPosition = currentPosition
+    LaunchedEffect(state.nowPlayingUri, currentPosition, dragging, state.isPlaying) {
+        if (!dragging) {
+            scrubPosition = currentPosition
+            val pending = pendingSeekPosition
+            val seekTolerance = maxOf(750f, duration * .005f)
+            if (pending != null && abs(currentPosition - pending) <= seekTolerance) {
+                smoothPosition.snapTo(currentPosition)
+                pendingSeekPosition = null
+            } else if (pending == null && abs(smoothPosition.value - currentPosition) > maxOf(1_500f, duration * .02f)) {
+                smoothPosition.snapTo(currentPosition)
+            } else if (pending == null) {
+                smoothPosition.animateTo(
+                    targetValue = currentPosition,
+                    animationSpec = tween(if (state.isPlaying) 520 else 160, easing = LinearEasing),
+                )
+            }
+        }
     }
 
     val seekModifier = Modifier
@@ -2088,6 +2102,7 @@ private fun ExpressiveSeekBar(
             setProgress { target ->
                 val value = target.coerceIn(0f, duration)
                 scrubPosition = value
+                pendingSeekPosition = value
                 viewModel.seekTo(value.toLong())
                 true
             }
@@ -2095,6 +2110,7 @@ private fun ExpressiveSeekBar(
         .pointerInput(duration) {
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = false)
+                pendingSeekPosition = null
                 dragging = true
                 scrubPosition = (down.position.x / size.width.toFloat()).coerceIn(0f, 1f) * duration
                 hapticStep = ((scrubPosition / duration) * 20).toInt()
@@ -2108,7 +2124,9 @@ private fun ExpressiveSeekBar(
                     }
                     change.consume()
                 }
-                viewModel.seekTo(scrubPosition.toLong())
+                val targetPosition = scrubPosition
+                pendingSeekPosition = targetPosition
+                viewModel.seekTo(targetPosition.toLong())
                 dragging = false
             }
         }
@@ -2715,6 +2733,7 @@ private fun ExpressiveSettings(
     onOpenReviewDecisions: () -> Unit,
 ) {
     BackHandler(onBack = onBack)
+    val context = LocalContext.current
     var reviewScope by rememberSaveable { mutableStateOf<String?>(state.reviewFolderName) }
     val reviewFolders = remember(state.songs) { state.songs.map(SongRef::folderName).distinct().sorted() }
     val reviewCandidates = state.songs.count { song ->
@@ -3057,6 +3076,37 @@ private fun ExpressiveSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                 )
+                OutlinedButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://github.com/projectescape/swipetune/blob/main/PRIVACY.md"),
+                                ),
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().padding(top = 14.dp),
+                    shape = RoundedCornerShape(18.dp),
+                ) {
+                    Text("Privacy policy")
+                }
+                TextButton(
+                    onClick = {
+                        runCatching {
+                            context.startActivity(
+                                Intent(
+                                    Intent.ACTION_VIEW,
+                                    Uri.parse("https://github.com/projectescape/swipetune"),
+                                ),
+                            )
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("View source code")
+                }
             }
         }
     }

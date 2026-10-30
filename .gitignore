@@ -5,4 +5,19 @@ local.properties
 *.iml
 .DS_Store
 .music_cleanup_delete_manifest.txt
+keystore.properties
+*.jks
+*.keystore
+
+# Project-local agent tooling
+.agents/
+skills-lock.json
+
+# Local design exploration and review working files
+/play/graphics/candidates/
+/play/graphics/variants/
+/play/graphics/frost-variants/
+/play/graphics/frost-play-variants/
+/play/PUBLIC_REVIEW.md
+/docs/internal/openscreen-demo-plan.md
 

@@ -1,0 +1,1 @@
+A beautiful local music player with an optional swipe-powered Review mode.

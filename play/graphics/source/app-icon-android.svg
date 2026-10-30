@@ -1,0 +1,15 @@
+<!-- Android launcher variant: same approved mark, transparent outside the circular base. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <radialGradient id="base" cx="38%" cy="30%"><stop stop-color="#111115"/><stop offset="1" stop-color="#000000"/></radialGradient>
+    <radialGradient id="lens" cx="34%" cy="24%"><stop stop-color="#F3EFFF" stop-opacity=".105"/><stop offset=".52" stop-color="#8A819A" stop-opacity=".045"/><stop offset="1" stop-color="#211E27" stop-opacity=".09"/></radialGradient>
+    <filter id="refract" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.8" result="soft"/><feTurbulence type="fractalNoise" baseFrequency=".014" numOctaves="2" seed="23" result="map"/><feDisplacementMap in="soft" in2="map" scale="4" xChannelSelector="R" yChannelSelector="G"/></filter>
+    <clipPath id="lensClip"><circle cx="256" cy="256" r="166"/></clipPath>
+  </defs>
+  <circle cx="256" cy="256" r="224" fill="url(#base)"/>
+  <g fill="#208F87"><rect x="148" y="150" width="216" height="34" rx="12"/><rect x="148" y="239" width="216" height="34" rx="12"/><rect x="148" y="328" width="216" height="34" rx="12"/></g>
+  <circle cx="256" cy="256" r="166" fill="#050506" fill-opacity=".5"/>
+  <g clip-path="url(#lensClip)" filter="url(#refract)" fill="#208F87" opacity=".68"><rect x="145" y="147" width="222" height="40" rx="14"/><rect x="145" y="236" width="222" height="40" rx="14"/><rect x="145" y="325" width="222" height="40" rx="14"/></g>
+  <circle cx="256" cy="256" r="166" fill="url(#lens)" stroke="#F3EFFF" stroke-opacity=".12" stroke-width="2"/>
+  <path d="M226 190C220 186 214 190 214 198V314C214 322 220 326 226 322L332 261C339 257 339 251 332 247Z" fill="#B8B4C2" fill-opacity=".66"/>
+</svg>

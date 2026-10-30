@@ -51,7 +51,7 @@ PixelPlayer's strongest transferable patterns are architectural: a `MediaSession
 
 - Keep the current 0.3 JSON state readable for a one-time import into the new database.
 - Preserve the working `MediaSessionService` while its internals are upgraded.
-- Encode the observed motion contract in `design.md`; keep benchmark videos outside the repository as QA evidence.
+- Encode the observed motion contract in `docs/design.md`; keep benchmark videos outside the repository as QA evidence.
 - Add schema, repository, service, and UI tests before retiring old paths.
 
 Acceptance: upgrading does not lose favorites, playlists, review decisions, queue, or selected folder; current playback still launches during migration.
@@ -77,7 +77,7 @@ Acceptance: every indexed item is reachable through a useful collection detail s
 
 - Make the service the sole queue authority and expose Media3 custom commands for Play Next, append, move, remove, clear, save as playlist, and undo.
 - Add drag reorder, queue source labels, queue persistence, and optimistic undo.
-- Rebuild mini/full players around shared state, continuous progress, active-row equalizer, waveform seek, container continuity, press feedback, and reduced-motion fallbacks from `design.md`.
+- Rebuild mini/full players around shared state, continuous progress, active-row equalizer, waveform seek, container continuity, press feedback, and reduced-motion fallbacks from `docs/design.md`.
 
 Acceptance: app, notification, lock screen, Bluetooth, Android Auto, mini-player, full player, and queue sheet always agree; queue edits survive process recreation.
 
@@ -211,7 +211,7 @@ Acceptance: all three theme modes work without restart, dynamic color can be tog
 ### Gate 6 — expressive rebuild
 
 - Split the oversized UI into focused Library, Review, Player, Settings, and shared-component files.
-- Apply `design.md`: album-art-led atmosphere, selective frost, asymmetric expressive shapes, semantic color, and purposeful spring motion.
+- Apply `docs/design.md`: album-art-led atmosphere, selective frost, asymmetric expressive shapes, semantic color, and purposeful spring motion.
 - Add compact and expanded layouts and accessibility semantics/content descriptions.
 - Avoid dead controls for unimplemented advanced modules.
 

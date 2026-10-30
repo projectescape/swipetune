@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="500" viewBox="0 0 1024 500">
+  <defs>
+    <clipPath id="brandIconClip"><circle cx="142" cy="148" r="66"/></clipPath>
+  </defs>
+  <rect width="1024" height="500" fill="#121118"/>
+  <circle cx="874" cy="84" r="174" fill="#251F42"/>
+  <circle cx="900" cy="470" r="245" fill="#142E2C"/>
+
+  <image href="app-icon.svg" x="76" y="82" width="132" height="132" clip-path="url(#brandIconClip)"/>
+
+  <text x="76" y="295" fill="#F2EDFA" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="700">SwipeTune</text>
+  <text x="80" y="352" fill="#CFC7DC" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="500">Local music · optional Review</text>
+
+  <g transform="translate(640 92) rotate(-8 120 150)">
+    <rect width="240" height="300" rx="44" fill="#272432" stroke="#464052" stroke-width="3"/>
+    <rect x="24" y="24" width="192" height="192" rx="32" fill="#7257DA"/>
+    <path d="M58 162 C92 108 132 190 188 96" fill="none" stroke="#B9A9FF" stroke-width="16" stroke-linecap="round"/>
+    <rect x="28" y="238" width="132" height="18" rx="9" fill="#F2EDFA"/>
+    <rect x="28" y="269" width="92" height="12" rx="6" fill="#AAA0B8"/>
+  </g>
+  <g transform="translate(798 120) rotate(10 92 128)">
+    <rect width="184" height="256" rx="38" fill="#202C2C" stroke="#3F5553" stroke-width="3"/>
+    <circle cx="92" cy="100" r="62" fill="#35D8C5"/>
+    <path d="M67 102 L86 121 L122 79" fill="none" stroke="#12302D" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <rect x="24" y="188" width="112" height="16" rx="8" fill="#E6F4F0"/>
+    <rect x="24" y="218" width="78" height="11" rx="6" fill="#93AAA6"/>
+  </g>
+</svg>

@@ -1,49 +1,77 @@
 # SwipeTune
 
-SwipeTune is an open-source, local-first Android music player with an optional swipe-based library review mode.
+<p align="center">
+  <img src="play/graphics/app-icon.png" width="128" alt="SwipeTune logo" />
+</p>
 
-## Features
+**A complete local music player—with an optional swipe-powered way to clean up your library.**
 
-- Automatically index the music Android exposes on the device, refresh when MediaStore changes, and optionally add another folder through the system folder picker.
-- Play local MP3, FLAC, M4A, AAC, WAV, and OGG files.
-- View embedded album art, title, artist, and album metadata.
-- Browse songs, albums, artists, genres, folders, favorites, playback history, and persistent local playlists.
-- Search and sort the library, play collections, and shuffle the visible library.
-- Use a persistent mini-player or an immersive full player with seek, previous/next, shuffle, repeat, favorite, and queue controls.
-- Continue playback in the background with Android lock-screen, notification, Bluetooth, and headset controls through Media3.
-- Resume the last queue, track, position, shuffle state, and repeat state after service recreation.
-- Reorder the live queue, play next, append songs, undo queue edits, clear upcoming tracks, or save the queue as a playlist.
-- Browse the same library from Android Auto and control playback from the system media player, lock screen, notification shade, Bluetooth, a home-screen widget, and headset controls.
-- Use local synchronized LRC lyrics, a service-owned sleep timer, audio-session equalizer, bass boost, loudness, ReplayGain, gapless/offload preferences, and optional fade transitions.
-- Create ordered playlists with custom covers, duplicate/merge/quick-fill them, and import or export M3U/M3U8 playlists.
-- Use non-deletable Accepted and Rejected smart playlists that update from Review decisions; Rejected is the deliberate place to inspect tracks hidden elsewhere.
-- Select multiple tracks for batch queue, favorite, or Review actions; find likely duplicate recordings without deleting them automatically.
-- Keep playback history and restore playlists, Review decisions, preferences, and history with Android Auto Backup or a portable ZIP backup.
-- Choose System, Light, or Dark appearance and independently enable Android dynamic color.
-- Material 3 Expressive interface with dynamic color, album-art atmosphere, frosted floating controls, spring motion, and display-cutout-safe edge-to-edge layouts.
-- Play/pause, seek, and jump backward or forward ten seconds.
-- Start Review deliberately from Settings, targeting all unreviewed music or one indexed folder.
-- Resume the same persisted, non-repeating Review session after leaving or restarting the app.
-- Swipe right to keep and left to reject.
-- Undo returns to the previous song and reverses its decision.
-- Rejected songs are hidden from the normal music library without changing their files.
-- Inspect accepted and rejected decisions and clear either decision from Review settings.
-- Entering Review temporarily preserves the normal playback queue and restores it on exit.
-- Restore rejected songs, or permanently delete them only after an explicit confirmation.
-- No account, server, analytics, or collection-specific data.
+Listen normally. When your collection needs attention, start Review from Settings, choose all music or one folder, and decide by listening: swipe right to keep a song or left to reject it. Your decisions and place are saved, Undo is always close, and rejected songs stay on your device until you explicitly delete them.
 
-## License
+[Download the latest APK](https://github.com/projectescape/swipetune/releases/latest) · [Read the privacy policy](PRIVACY.md)
 
-SwipeTune is free software licensed under the GNU General Public License v3.0. It includes an FFmpeg decoder distributed through Jellyfin's GPLv3 Media3 extension. See `LICENSE` and the corresponding source in this repository. The software is provided without warranty.
+<p align="center">
+  <img src="docs/screenshots/review.png" width="30%" alt="SwipeTune Review mode with Keep, Reject, and Undo controls" />
+  <img src="docs/screenshots/now-playing.png" width="30%" alt="SwipeTune Now Playing screen with album artwork and expressive scrubber" />
+  <img src="docs/screenshots/library.png" width="30%" alt="SwipeTune local music library" />
+</p>
+
+## Why SwipeTune
+
+Most music players help you find something to play. SwipeTune also helps you make sense of the collection you already own—without turning cleanup into the main experience.
+
+- **A real music player first.** Browse songs, albums, artists, genres, folders, favorites, history, and playlists.
+- **Review when you choose.** Start it deliberately, scope it to a folder, leave at any time, and continue later.
+- **Safe decisions.** Rejecting hides a song inside SwipeTune; it does not delete the file. Restore or permanently delete it later from the Rejected smart playlist.
+- **Private by design.** No account, ads, analytics, developer-operated server, or internet permission.
+- **Made for Android.** Lock-screen and notification controls, Bluetooth, headsets, Android Auto, dynamic color, a widget, and display-cutout-safe edge-to-edge layouts.
+
+## Player and library
+
+- Local MP3, FLAC, M4A, AAC, WAV, OGG, and other device-compatible audio
+- Automatic MediaStore indexing plus optional folders selected through Android's system picker
+- Search, sorting, collection playback, shuffle, favorites, history, and persistent playlists
+- Full player and mini player with animated seek, previous/next, queue, shuffle, repeat, and favorite controls
+- Queue reordering, Play next, append, remove, clear, undo, and save as playlist
+- Local synchronized LRC lyrics, sleep timer, ReplayGain, gapless/offload preferences, equalizer, bass boost, and loudness controls
+- M3U/M3U8 import and export, portable backup and restore, and Android Auto Backup support
+- Duplicate suggestions that keep deletion explicit
+
+## Review mode
+
+- Review all unreviewed music or select one indexed folder
+- Swipe right to keep and left to reject
+- Undo the previous decision
+- Resume the same non-repeating session after leaving or restarting
+- Preserve and restore the normal playback queue when entering or leaving Review
+- Inspect decisions in non-deletable Accepted and Rejected smart playlists
+- Restore rejected songs or permanently delete them after confirmation
 
 ## Build
 
-Requirements: JDK 17, Android SDK 37, and build tools 36.0.0.
+Requirements: JDK 17, Android SDK 37, and Android build tools.
 
 ```bash
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
-mise exec -- ./gradlew lintDebug test assembleDebug
+mise exec -- ./gradlew lintDebug testDebugUnitTest assembleDebug
 ```
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
+
+The Play release uses an upload key kept outside the repository. On the configured release machine:
+
+```bash
+./scripts/build-play-release.sh
+```
+
+## Documentation
+
+- [Design system](docs/design.md)
+- [Implementation notes](docs/internal/implementation-plan.md)
+- [Interaction audit](docs/internal/interaction-audit.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+
+## License
+
+SwipeTune is free software licensed under the [GNU General Public License v3.0](LICENSE). It includes Jellyfin's GPLv3 Media3 FFmpeg decoder; source and license details are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). The software is provided without warranty.
 

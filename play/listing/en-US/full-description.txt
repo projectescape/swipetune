@@ -1,0 +1,38 @@
+SwipeTune is a private, local-first music player built to make large offline libraries feel lively, fluid, and easy to manage.
+
+PLAY YOUR MUSIC
+• Automatically indexes music available on your Android device
+• Supports MP3, FLAC, M4A, AAC, WAV, OGG, and other device-compatible formats
+• Shows album artwork, title, artist, album, genre, and folder information
+• Provides a full player, persistent mini player, live queue, search, sorting, and shuffle
+• Integrates with the lock screen, notification shade, Bluetooth, headsets, Android Auto, and a home-screen widget
+
+ORGANIZE YOUR LIBRARY
+• Browse songs, albums, artists, genres, folders, favorites, and playback history
+• Create and manage ordered playlists
+• Import and export M3U and M3U8 playlists
+• Find likely duplicate recordings while keeping deletion under your control
+• Back up playlists, settings, history, and Review decisions
+
+OPTIONAL REVIEW MODE
+Review is there when you want it—not on the main screen.
+
+Choose all unreviewed music or one folder, then listen and decide:
+• Swipe right to keep
+• Swipe left to reject
+• Undo the last decision
+• Leave and continue the same session later
+
+Rejected songs remain on your device but stay hidden from the normal SwipeTune library. Inspect them in the built-in Rejected playlist, restore them, or explicitly delete them after confirmation.
+
+EXPRESSIVE AND PERSONAL
+• Material 3 Expressive interface
+• System, light, and dark themes
+• Optional Android dynamic color
+• Artwork-driven atmosphere, fluid transitions, and animated scrubbers
+• Display-cutout-safe edge-to-edge layouts
+
+PRIVATE BY DESIGN
+SwipeTune has no ads, analytics, accounts, developer-operated servers, or tracking. Your library and listening metadata stay under your control.
+
+SwipeTune is free and open-source software licensed under GNU GPLv3.

@@ -4,6 +4,17 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val uploadKeystorePath = providers.environmentVariable("SWIPETUNE_UPLOAD_KEYSTORE").orNull
+val uploadStorePassword = providers.environmentVariable("SWIPETUNE_UPLOAD_STORE_PASSWORD").orNull
+val uploadKeyAlias = providers.environmentVariable("SWIPETUNE_UPLOAD_KEY_ALIAS").orNull
+val uploadKeyPassword = providers.environmentVariable("SWIPETUNE_UPLOAD_KEY_PASSWORD").orNull
+val hasUploadSigning = listOf(
+    uploadKeystorePath,
+    uploadStorePassword,
+    uploadKeyAlias,
+    uploadKeyPassword,
+).all { !it.isNullOrBlank() }
+
 android {
     namespace = "dev.swipetune.app"
     compileSdk = 37
@@ -12,8 +23,8 @@ android {
         applicationId = "dev.swipetune.app"
         minSdk = 29
         targetSdk = 37
-        versionCode = 6
-        versionName = "0.6.0"
+        versionCode = 7
+        versionName = "0.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -30,6 +41,23 @@ android {
 
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    }
+
+    signingConfigs {
+        if (hasUploadSigning) {
+            create("release") {
+                storeFile = file(uploadKeystorePath!!)
+                storePassword = uploadStorePassword
+                keyAlias = uploadKeyAlias
+                keyPassword = uploadKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.findByName("release")
+        }
     }
 }
 
